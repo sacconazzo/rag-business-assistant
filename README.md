@@ -13,7 +13,7 @@ Production-ready: hybrid search, reranking, circuit breaker, retry, metriche, lo
          CDN / Load Balancer
                 │
         ┌───────┴───────┐
-        │  Open WebUI   │  ← il cliente vede solo questo
+        │  Open WebUI   │  ← la tua interface
         │  (porta 3000) │
         └───────┬───────┘
                 │
