@@ -11,7 +11,7 @@ services:
       - qdrant-snapshots:/qdrant/snapshots
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:6333/healthz"]
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/localhost/6333' 2>/dev/null && echo OK || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5
