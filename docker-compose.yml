@@ -3,7 +3,7 @@ services:
   # === QDRANT — Database vettoriale ===
   qdrant:
     image: qdrant/qdrant:latest
-    container_name: qdrant
+    container_name: rag-qdrant
     ports:
       - "${QDRANT_PORT:-6333}:6333"
     volumes:
