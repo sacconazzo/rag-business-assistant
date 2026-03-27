@@ -89,6 +89,7 @@ services:
     container_name: indexer
     volumes:
       - ${REPOS_HOST_PATH}:/data/repos:ro
+      - hf-models:/root/.cache/huggingface
     environment:
       - QDRANT_URL=http://qdrant:6333
       - COLLECTION_NAME=${COLLECTION_NAME:-codebase}
@@ -96,7 +97,7 @@ services:
       - CHUNK_MAX_CHARS=${CHUNK_MAX_CHARS:-1500}
       - CHUNK_OVERLAP_CHARS=${CHUNK_OVERLAP_CHARS:-200}
       - EMBEDDING_MODEL=${EMBEDDING_MODEL:-BAAI/bge-base-en-v1.5}
-      - BATCH_SIZE=${BATCH_SIZE:-128}
+      - BATCH_SIZE=${BATCH_SIZE:-64}
       - HNSW_M=${HNSW_M:-16}
       - HNSW_EF=${HNSW_EF:-128}
       - ENABLE_QUANTIZATION=${ENABLE_QUANTIZATION:-true}

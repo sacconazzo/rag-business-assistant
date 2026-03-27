@@ -236,7 +236,7 @@ curl -X POST http://localhost:8001/reindex
 | `HYBRID_ALPHA` | `0.65` | Vector vs full-text weight |
 | `EMBEDDING_MODEL` | `BAAI/bge-base-en-v1.5` | Sentence-transformer model |
 | `EMBEDDING_QUERY_PREFIX` | `Represent this sentence...` | Query prefix for instruction models |
-| `BATCH_SIZE` | `128` | Indexing batch size |
+| `BATCH_SIZE` | `64` | Indexing batch size |
 | `HNSW_M` | `16` | HNSW connections per node |
 | `HNSW_EF` | `128` | HNSW construction candidates |
 | `ENABLE_QUANTIZATION` | `true` | Scalar INT8 quantization |

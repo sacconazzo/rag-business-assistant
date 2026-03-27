@@ -23,7 +23,7 @@ REPOS_PATH = os.getenv("REPOS_PATH", "./repos")
 CHUNK_MAX_CHARS = int(os.getenv("CHUNK_MAX_CHARS", "1500"))
 CHUNK_OVERLAP_CHARS = int(os.getenv("CHUNK_OVERLAP_CHARS", "200"))
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "BAAI/bge-base-en-v1.5")
-BATCH_SIZE = int(os.getenv("BATCH_SIZE", "128"))
+BATCH_SIZE = int(os.getenv("BATCH_SIZE", "64"))
 HNSW_M = int(os.getenv("HNSW_M", "16"))
 HNSW_EF = int(os.getenv("HNSW_EF", "128"))
 ENABLE_QUANTIZATION = os.getenv("ENABLE_QUANTIZATION", "true").lower() == "true"
@@ -85,6 +85,9 @@ def chunk_codice(testo: str, filepath: str, max_chars: int = CHUNK_MAX_CHARS,
         "interface ", "struct ", "enum ",
         "module ", "namespace ",
         "describe(", "it(", "test(",
+        "router.get(", "router.post(", "router.put(", "router.delete(", "router.patch(",
+        "app.get(", "app.post(", "app.put(", "app.delete(", "app.use(",
+        "module.exports",
     )
 
     for riga in righe:
