@@ -3,8 +3,6 @@
 AI assistant for querying the business logic of your repositories.
 **Qdrant** + **Google Gemini** + **Open WebUI**.
 
-Production-ready: hybrid search, reranking, circuit breaker, retry, metrics, logging.
-
 ---
 
 ## 📋 Architecture
