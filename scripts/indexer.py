@@ -20,7 +20,8 @@ QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
 COLLECTION_NAME = os.getenv("COLLECTION_NAME", "codebase")
 REPOS_PATH = os.getenv("REPOS_PATH", "./repos")
 CHUNK_MAX_CHARS = int(os.getenv("CHUNK_MAX_CHARS", "1500"))
-EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2")
+# EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2")
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "all-mpnet-base-v2")
 
 FILE_EXTENSIONS = [
     "*.py", "*.js", "*.ts", "*.tsx", "*.jsx",

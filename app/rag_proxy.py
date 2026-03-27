@@ -33,7 +33,8 @@ GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
 COLLECTION_NAME = os.getenv("COLLECTION_NAME", "codebase")
 MAX_RISULTATI = int(os.getenv("MAX_RISULTATI", "8"))
-EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2")
+# EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2")
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "all-mpnet-base-v2")
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 ENABLE_QUERY_LOG = os.getenv("ENABLE_QUERY_LOG", "true").lower() == "true"
 
