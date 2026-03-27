@@ -16,7 +16,7 @@ from collections import defaultdict
 
 import google.generativeai as genai
 from qdrant_client import QdrantClient
-from qdrant_client.models import Filter, FieldCondition, MatchValue, MatchText
+from qdrant_client.models import Filter, FieldCondition, MatchValue, MatchText, NamedVector, Query
 from sentence_transformers import SentenceTransformer, CrossEncoder
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request
@@ -346,12 +346,12 @@ def cerca_contesto(domanda: str, n_risultati: int = MAX_RISULTATI) -> list[dict]
     candidates = RERANK_CANDIDATES if ENABLE_RERANKING else n_risultati
 
     # --- Ricerca vettoriale ---
-    vector_results = qdrant.search(
+    vector_results = qdrant.query_points(
         collection_name=COLLECTION_NAME,
-        query_vector=query_vector,
+        query=query_vector,
         limit=candidates,
         with_payload=True,
-    )
+    ).points
 
     # --- Ricerca full-text ---
     text_results = []
