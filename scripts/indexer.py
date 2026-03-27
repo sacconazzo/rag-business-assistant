@@ -56,7 +56,7 @@ MAX_FILE_SIZE = 100_000
 
 
 def _get_overlap_lines(lines: list[str], max_overlap: int) -> tuple[list[str], int]:
-    """Returns (overlap_lines, overlap_length) from the end of the given lines."""
+    """Restituisce (overlap_lines, overlap_length) dalla fine delle righe date."""
     if max_overlap <= 0 or not lines:
         return [], 0
     overlap_lines = []

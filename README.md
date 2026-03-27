@@ -1,62 +1,62 @@
 # 🤖 RAG Business Assistant
 
-AI assistant for querying the business logic of your repositories.
+Assistente AI per interrogare la logica di business dei tuoi repository.
 **Qdrant** + **Google Gemini** + **Open WebUI**.
 
 ---
 
-## 📋 Architecture
+## 📋 Architettura
 
 ```
          CDN / Load Balancer
                 │
         ┌───────┴───────┐
-        │  Open WebUI   │  ← your interface
-        │  (port 3000)  │
+        │  Open WebUI   │  ← interfaccia utente
+        │  (porta 3000) │
         └───────┬───────┘
                 │
         ┌───────┴────────────────┐     ┌──────────────┐
         │  RAG Proxy (FastAPI)   │────▶│  Gemini API  │
-        │  (port 8001)           │     └──────────────┘
+        │  (porta 8001)          │     └──────────────┘
         │                        │
-        │  • Hybrid search       │
+        │  • Ricerca ibrida      │
         │  • Reranking           │
         │  • Circuit breaker     │
         │  • Rate limiting       │
         │  • Retry + backoff     │
-        │  • Metrics + logging   │
+        │  • Metriche + logging  │
         └───────┬────────────────┘
                 │
         ┌───────┴───────┐
         │    Qdrant     │
-        │  (port 6333)  │
+        │  (porta 6333) │
         └───────────────┘
 ```
 
 ---
 
-## 🚀 Quick Start
+## 🚀 Avvio rapido
 
-### Prerequisites
+### Prerequisiti
 
-- Docker and Docker Compose
-- Gemini API key → https://aistudio.google.com/apikey
-- Folder containing your repositories
+- Docker e Docker Compose
+- Chiave API Gemini → https://aistudio.google.com/apikey
+- Cartella contenente i tuoi repository
 
-### 1. Configure
+### 1. Configura
 
 ```bash
 cd rag-business-assistant
 cp .env.example .env
 ```
 
-Edit `.env`:
+Modifica `.env`:
 ```env
-GEMINI_API_KEY=AIzaSy-your-key
-REPOS_HOST_PATH=/home/mario/projects   # your folder, as-is
+GEMINI_API_KEY=AIzaSy-la-tua-chiave
+REPOS_HOST_PATH=/home/mario/projects   # la tua cartella, così com'è
 ```
 
-The folder must contain subfolders (each subfolder = one repo):
+La cartella deve contenere sottocartelle (ogni sottocartella = un repository):
 ```
 /home/mario/projects/
 ├── repo-api/
@@ -65,7 +65,7 @@ The folder must contain subfolders (each subfolder = one repo):
 └── ...
 ```
 
-### 2. Index
+### 2. Indicizza
 
 ```bash
 docker compose up -d qdrant
@@ -73,74 +73,95 @@ sleep 10
 docker compose run --rm indexer
 ```
 
-### 3. Start
+### 3. Avvia
 
 ```bash
 docker compose up -d
 ```
 
-### 4. Configure Open WebUI
+### 4. Configura Open WebUI
 
-1. Open http://localhost:3000, create admin account
-2. **Admin Panel → Settings → Connections**
-3. Add OpenAI API: URL `http://rag-proxy:8001/v1`, Key `not-needed`
-4. Select model **"business-assistant"** in the chat
+1. Apri http://localhost:3000, crea l'account admin
+2. **Pannello Admin → Impostazioni → Connessioni**
+3. Aggiungi OpenAI API: URL `http://rag-proxy:8001/v1`, Chiave `not-needed`
+4. Seleziona il modello **"business-assistant"** nella chat
 
 ---
 
-## 🔍 RAG Quality
+## 🔍 Qualità RAG
 
-The system uses three techniques to maximize relevance:
+Il sistema usa tre tecniche per massimizzare la rilevanza dei risultati:
 
-### Hybrid Search
-Combines **vector** search (semantic, captures meaning) with **full-text** search (keyword, captures exact terms). The weight is configurable via `HYBRID_ALPHA`:
-- `1.0` = vector only
-- `0.0` = full-text only
-- `0.7` = default, good balance
+### Ricerca ibrida
+Combina ricerca **vettoriale** (semantica, cattura il significato) con ricerca **full-text** (keyword, cattura termini esatti). Il peso è configurabile tramite `HYBRID_ALPHA`:
+- `1.0` = solo vettoriale
+- `0.0` = solo full-text
+- `0.65` = default, bilanciato per codice (più peso al keyword matching per nomi funzioni/variabili)
 
-Results appearing in both searches receive a boost.
+I risultati presenti in entrambe le ricerche ricevono un bonus di punteggio.
 
 ### Reranking
-After search, a **cross-encoder** (ms-marco-MiniLM-L-6-v2) re-evaluates each result by directly comparing it with the question. Slower than vector search alone, but much more accurate because the cross-encoder "reads" question and context together.
+Dopo la ricerca, un **cross-encoder** (`cross-encoder/ms-marco-MiniLM-L-6-v2`) rivaluta ogni risultato confrontandolo direttamente con la domanda. Più lento della sola ricerca vettoriale, ma molto più preciso perché il cross-encoder "legge" domanda e contesto insieme.
 
-Configurable: `ENABLE_RERANKING=true/false`, `RERANK_CANDIDATES=30` (how many candidates to evaluate).
+Configurabile: `ENABLE_RERANKING=true/false`, `RERANK_CANDIDATES=30` (quanti candidati valutare).
 
-### Smart Chunking
-Code is split into logical blocks (functions, classes, methods), not fixed lines. Each chunk includes the file path as a header to preserve context. Consecutive chunks overlap by `CHUNK_OVERLAP_CHARS` characters (default 200) to avoid losing context at chunk boundaries.
+### Chunking intelligente
+Il codice viene suddiviso in blocchi logici (funzioni, classi, route handler Express), non per righe fisse. Ogni chunk include il percorso completo del file come header per preservare il contesto. I chunk consecutivi si sovrappongono di `CHUNK_OVERLAP_CHARS` caratteri (default 200) per evitare perdita di contesto ai confini.
 
 ---
 
-## 🛡️ Resilience
+## 🧠 Modelli embedding
 
-### Retry with exponential backoff
-If Gemini returns a temporary error (500, 429, timeout), the proxy automatically retries with increasing delay: 1s → 2s → 4s. Does not retry on client errors (invalid API key, malformed request).
+### Modello predefinito: `BAAI/bge-base-en-v1.5`
+Modello general-purpose con ottimi punteggi nei benchmark MTEB per code search. 110M parametri, 768 dimensioni, ~440MB. Gira bene su CPU (MacBook Pro M3/M4).
+
+### `EMBEDDING_QUERY_PREFIX`
+BGE è un modello **instruction-following**: richiede un prefisso testuale sulle query per ottenere risultati ottimali. I documenti vengono indicizzati **senza** prefisso, mentre le query di ricerca lo usano. Il valore predefinito è `Represent this sentence for searching relevant passages: `. Se si passa a un modello senza prefisso (es. `all-mpnet-base-v2`), basta svuotare la variabile.
+
+### Modello alternativo consigliato: `jinaai/jina-embeddings-v2-base-code`
+Specifico per codice sorgente, con finestra di contesto da 8K token (vs 512 di BGE). Ideale se la priorità è la comprensione del codice JavaScript e il tempo di indicizzazione non è critico. Per usarlo:
+```env
+EMBEDDING_MODEL=jinaai/jina-embeddings-v2-base-code
+EMBEDDING_QUERY_PREFIX=
+```
+> ⚠️ Cambiare modello richiede la reindicizzazione completa: `docker compose run --rm indexer`
+
+### Altre alternative
+- `all-mpnet-base-v2` — buon modello general-purpose (768 dim, nessun prefisso necessario)
+
+---
+
+## 🛡️ Resilienza
+
+### Retry con backoff esponenziale
+Se Gemini restituisce un errore temporaneo (500, 429, timeout), il proxy ritenta automaticamente con ritardo crescente: 1s → 2s → 4s. Non ritenta su errori client (chiave API invalida, richiesta malformata).
 
 ### Circuit breaker
-If Gemini fails 5 consecutive times, the circuit **opens**: the proxy stops calling Gemini for 30 seconds and returns 503. After the cooldown, it tries a test request. If successful, resumes normally.
+Se Gemini fallisce 5 volte consecutive, il circuito si **apre**: il proxy smette di chiamare Gemini per 30 secondi e restituisce 503. Dopo il cooldown, prova una richiesta di test. Se ha successo, riprende normalmente.
 
-This avoids accumulating timeouts during a service outage.
+Questo evita di accumulare timeout durante un'interruzione del servizio.
 
 ### Rate limiting
-Configurable per-IP limit (default: 30 requests/minute). Returns 429 with `Retry-After` header.
+Limite configurabile per IP (default: 30 richieste/minuto). Restituisce 429 con header `Retry-After`.
 
 ---
 
-## 📊 Observability
+## 📊 Osservabilità
 
-### Metrics endpoints
+### Endpoint metriche
 
 ```bash
-# Health check (for CDN / load balancer)
+# Health check (per CDN / load balancer)
 curl http://localhost:8001/health
 
-# Detailed metrics
+# Metriche dettagliate
 curl http://localhost:8001/metrics
 
-# Qdrant stats + metrics
+# Statistiche Qdrant + metriche
 curl http://localhost:8001/stats
 ```
 
-### What you find in /metrics
+### Cosa trovi in /metrics
 
 ```json
 {
@@ -174,81 +195,81 @@ curl http://localhost:8001/stats
 }
 ```
 
-### Query log
+### Log delle query
 
-Every question is logged to `/app/logs/queries.jsonl` with:
-- Question text (truncated to 200 chars)
-- Number of sources found
-- Total latency and RAG latency
-- Tokens consumed
+Ogni domanda viene loggata in `/app/logs/queries.jsonl` con:
+- Testo della domanda (troncato a 200 caratteri)
+- Numero di fonti trovate
+- Latenza totale e latenza RAG
+- Token consumati
 - Timestamp
 
-The `logs-data` volume persists across restarts. You can analyze logs with `jq`:
+Il volume `logs-data` persiste tra i riavvii. Puoi analizzare i log con `jq`:
 
 ```bash
-# Questions without context (indicates indexing issues)
+# Domande senza contesto (indica problemi di indicizzazione)
 docker compose exec rag-proxy cat /app/logs/queries.jsonl | jq 'select(.fonti == 0)'
 
-# Slowest questions
+# Domande più lente
 docker compose exec rag-proxy cat /app/logs/queries.jsonl | jq -s 'sort_by(-.latency_ms) | .[0:10]'
 
-# Approximate daily cost
+# Costo giornaliero approssimativo
 curl -s http://localhost:8001/metrics | jq '.cost_usd'
 ```
 
-### Qdrant Dashboard
-http://localhost:6333/dashboard — indexed vectors, performance, collection status.
+### Dashboard Qdrant
+http://localhost:6333/dashboard — vettori indicizzati, performance, stato della collection.
 
 ---
 
-## 🔄 Update the index
+## 🔄 Aggiornare l'indice
 
 ```bash
 docker compose run --rm indexer
 ```
 
-Or nightly cron:
+Oppure cron notturno:
 ```cron
 0 3 * * * cd /path/to/rag-business-assistant && bash scripts/reindex.sh >> logs/reindex.log 2>&1
 ```
 
-Or via API:
+Oppure via API:
 ```bash
 curl -X POST http://localhost:8001/reindex
 ```
 
 ---
 
-## ⚙️ Configuration
+## ⚙️ Configurazione
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `GEMINI_API_KEY` | (required) | Gemini API key |
-| `REPOS_HOST_PATH` | (required) | Path to repositories folder |
-| `GEMINI_MODEL` | `gemini-2.5-flash` | Gemini model |
-| `MAX_RISULTATI` | `8` | Chunks in context |
-| `CHUNK_MAX_CHARS` | `1500` | Maximum chunk size (chars) |
-| `CHUNK_OVERLAP_CHARS` | `200` | Overlap between consecutive chunks (chars) |
-| `ENABLE_RERANKING` | `true` | Cross-encoder reranking |
-| `RERANK_CANDIDATES` | `30` | Pre-reranking candidates |
-| `RERANKER_MODEL` | `cross-encoder/ms-marco-MiniLM-L-6-v2` | Cross-encoder model |
-| `RERANK_TRUNCATE` | `512` | Max chars passed to reranker |
-| `HYBRID_ALPHA` | `0.65` | Vector vs full-text weight |
-| `EMBEDDING_MODEL` | `BAAI/bge-base-en-v1.5` | Sentence-transformer model |
-| `EMBEDDING_QUERY_PREFIX` | `Represent this sentence...` | Query prefix for instruction models |
-| `BATCH_SIZE` | `64` | Indexing batch size |
-| `HNSW_M` | `16` | HNSW connections per node |
-| `HNSW_EF` | `128` | HNSW construction candidates |
-| `ENABLE_QUANTIZATION` | `true` | Scalar INT8 quantization |
-| `GEMINI_MAX_RETRIES` | `3` | Retries on error |
-| `GEMINI_RETRY_DELAY` | `1.0` | Base retry delay (sec) |
-| `RATE_LIMIT_PER_MINUTE` | `30` | Max requests/min per IP |
-| `LOG_LEVEL` | `INFO` | Log level |
-| `ENABLE_QUERY_LOG` | `true` | Log queries to file |
+| Variabile | Default | Descrizione |
+|-----------|---------|-------------|
+| `GEMINI_API_KEY` | (obbligatorio) | Chiave API Gemini |
+| `REPOS_HOST_PATH` | (obbligatorio) | Percorso alla cartella dei repository |
+| `GEMINI_MODEL` | `gemini-2.5-flash` | Modello Gemini |
+| `MAX_RISULTATI` | `8` | Chunk nel contesto |
+| `CHUNK_MAX_CHARS` | `1500` | Dimensione massima chunk (caratteri) |
+| `CHUNK_OVERLAP_CHARS` | `200` | Sovrapposizione tra chunk consecutivi (caratteri) |
+| `ENABLE_RERANKING` | `true` | Reranking con cross-encoder |
+| `RERANK_CANDIDATES` | `30` | Candidati pre-reranking |
+| `RERANKER_MODEL` | `cross-encoder/ms-marco-MiniLM-L-6-v2` | Modello cross-encoder |
+| `RERANK_TRUNCATE` | `512` | Caratteri massimi passati al reranker |
+| `HYBRID_ALPHA` | `0.65` | Peso vettoriale vs full-text |
+| `EMBEDDING_MODEL` | `BAAI/bge-base-en-v1.5` | Modello sentence-transformer |
+| `EMBEDDING_QUERY_PREFIX` | `Represent this sentence...` | Prefisso query per modelli instruction-following (vedi sezione Modelli embedding) |
+| `BATCH_SIZE` | `64` | Dimensione batch indicizzazione |
+| `HNSW_M` | `16` | Connessioni per nodo HNSW |
+| `HNSW_EF` | `128` | Candidati costruzione HNSW |
+| `ENABLE_QUANTIZATION` | `true` | Quantizzazione scalare INT8 |
+| `GEMINI_MAX_RETRIES` | `3` | Tentativi in caso di errore |
+| `GEMINI_RETRY_DELAY` | `1.0` | Ritardo base retry (sec) |
+| `RATE_LIMIT_PER_MINUTE` | `30` | Richieste max/min per IP |
+| `LOG_LEVEL` | `INFO` | Livello di log |
+| `ENABLE_QUERY_LOG` | `true` | Salva log delle query su file |
 
 ---
 
-## 📁 Structure
+## 📁 Struttura
 
 ```
 rag-business-assistant/
@@ -259,8 +280,8 @@ rag-business-assistant/
 ├── .gitignore
 ├── README.md
 ├── app/
-│   └── rag_proxy.py        # RAG + Gemini + resilience + metrics
+│   └── rag_proxy.py        # RAG + Gemini + resilienza + metriche
 └── scripts/
-    ├── indexer.py            # Indexing → Qdrant
-    └── reindex.sh            # Automatic update
+    ├── indexer.py            # Indicizzazione → Qdrant
+    └── reindex.sh            # Aggiornamento automatico
 ```
