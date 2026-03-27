@@ -52,6 +52,7 @@ services:
       - "${RAG_PROXY_PORT:-8001}:8001"
     volumes:
       - logs-data:/app/logs
+      - hf-models:/root/.cache/huggingface
     environment:
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - GEMINI_MODEL=${GEMINI_MODEL:-gemini-2.5-flash}
@@ -115,3 +116,4 @@ volumes:
   qdrant-data:
   qdrant-snapshots:
   logs-data:
+  hf-models:
