@@ -233,8 +233,9 @@ curl -X POST http://localhost:8001/reindex
 | `RERANK_CANDIDATES` | `30` | Pre-reranking candidates |
 | `RERANKER_MODEL` | `cross-encoder/ms-marco-MiniLM-L-6-v2` | Cross-encoder model |
 | `RERANK_TRUNCATE` | `512` | Max chars passed to reranker |
-| `HYBRID_ALPHA` | `0.7` | Vector vs full-text weight |
-| `EMBEDDING_MODEL` | `all-mpnet-base-v2` | Sentence-transformer model |
+| `HYBRID_ALPHA` | `0.65` | Vector vs full-text weight |
+| `EMBEDDING_MODEL` | `BAAI/bge-base-en-v1.5` | Sentence-transformer model |
+| `EMBEDDING_QUERY_PREFIX` | `Represent this sentence...` | Query prefix for instruction models |
 | `BATCH_SIZE` | `128` | Indexing batch size |
 | `HNSW_M` | `16` | HNSW connections per node |
 | `HNSW_EF` | `128` | HNSW construction candidates |

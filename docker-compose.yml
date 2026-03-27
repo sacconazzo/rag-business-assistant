@@ -64,8 +64,9 @@ services:
       - RATE_LIMIT_PER_MINUTE=${RATE_LIMIT_PER_MINUTE:-30}
       - ENABLE_RERANKING=${ENABLE_RERANKING:-true}
       - RERANK_CANDIDATES=${RERANK_CANDIDATES:-30}
-      - HYBRID_ALPHA=${HYBRID_ALPHA:-0.7}
-      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-all-mpnet-base-v2}
+      - HYBRID_ALPHA=${HYBRID_ALPHA:-0.65}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-BAAI/bge-base-en-v1.5}
+      - EMBEDDING_QUERY_PREFIX=${EMBEDDING_QUERY_PREFIX:-Represent this sentence for searching relevant passages: }
       - RERANKER_MODEL=${RERANKER_MODEL:-cross-encoder/ms-marco-MiniLM-L-6-v2}
       - RERANK_TRUNCATE=${RERANK_TRUNCATE:-512}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
@@ -94,7 +95,7 @@ services:
       - REPOS_PATH=/data/repos
       - CHUNK_MAX_CHARS=${CHUNK_MAX_CHARS:-1500}
       - CHUNK_OVERLAP_CHARS=${CHUNK_OVERLAP_CHARS:-200}
-      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-all-mpnet-base-v2}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-BAAI/bge-base-en-v1.5}
       - BATCH_SIZE=${BATCH_SIZE:-128}
       - HNSW_M=${HNSW_M:-16}
       - HNSW_EF=${HNSW_EF:-128}

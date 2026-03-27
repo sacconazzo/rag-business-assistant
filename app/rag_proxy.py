@@ -33,7 +33,8 @@ GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
 COLLECTION_NAME = os.getenv("COLLECTION_NAME", "codebase")
 MAX_RISULTATI = int(os.getenv("MAX_RISULTATI", "8"))
-EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "all-mpnet-base-v2")
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "BAAI/bge-base-en-v1.5")
+EMBEDDING_QUERY_PREFIX = os.getenv("EMBEDDING_QUERY_PREFIX", "Represent this sentence for searching relevant passages: ")
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 ENABLE_QUERY_LOG = os.getenv("ENABLE_QUERY_LOG", "true").lower() == "true"
 
@@ -45,7 +46,7 @@ RATE_LIMIT_PER_MINUTE = int(os.getenv("RATE_LIMIT_PER_MINUTE", "30"))
 # RAG avanzato
 ENABLE_RERANKING = os.getenv("ENABLE_RERANKING", "true").lower() == "true"
 RERANK_CANDIDATES = int(os.getenv("RERANK_CANDIDATES", "30"))
-HYBRID_ALPHA = float(os.getenv("HYBRID_ALPHA", "0.7"))
+HYBRID_ALPHA = float(os.getenv("HYBRID_ALPHA", "0.65"))
 RERANKER_MODEL = os.getenv("RERANKER_MODEL", "cross-encoder/ms-marco-MiniLM-L-6-v2")
 RERANK_TRUNCATE = int(os.getenv("RERANK_TRUNCATE", "512"))
 
@@ -343,7 +344,7 @@ def cerca_contesto(domanda: str, n_risultati: int = MAX_RISULTATI) -> list[dict]
     3. Fusione con peso HYBRID_ALPHA
     4. Reranking con cross-encoder
     """
-    query_vector = embedder.encode(domanda).tolist()
+    query_vector = embedder.encode(EMBEDDING_QUERY_PREFIX + domanda).tolist()
     candidates = RERANK_CANDIDATES if ENABLE_RERANKING else n_risultati
 
     # --- Ricerca vettoriale ---
