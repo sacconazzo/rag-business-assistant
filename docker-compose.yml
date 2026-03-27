@@ -1,0 +1,117 @@
+services:
+
+  # === QDRANT — Database vettoriale ===
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: qdrant
+    ports:
+      - "${QDRANT_PORT:-6333}:6333"
+    volumes:
+      - qdrant-data:/qdrant/storage
+      - qdrant-snapshots:/qdrant/snapshots
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6333/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: "2"
+
+  # === OPEN WEBUI — Interfaccia chat ===
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: open-webui
+    ports:
+      - "${WEBUI_PORT:-3000}:8080"
+    volumes:
+      - open-webui-data:/app/backend/data
+    environment:
+      - ENABLE_OLLAMA_API=false
+      - OPENAI_API_BASE_URL=http://rag-proxy:8001/v1
+      - OPENAI_API_KEY=not-needed
+    depends_on:
+      - rag-proxy
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: "1"
+
+  # === RAG PROXY — FastAPI con RAG + Gemini ===
+  rag-proxy:
+    build:
+      context: .
+      dockerfile: Dockerfile.proxy
+    container_name: rag-proxy
+    ports:
+      - "${RAG_PROXY_PORT:-8001}:8001"
+    volumes:
+      - logs-data:/app/logs
+    environment:
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - GEMINI_MODEL=${GEMINI_MODEL:-gemini-2.5-flash}
+      - QDRANT_URL=http://qdrant:6333
+      - COLLECTION_NAME=${COLLECTION_NAME:-codebase}
+      - MAX_RISULTATI=${MAX_RISULTATI:-8}
+      - GEMINI_MAX_RETRIES=${GEMINI_MAX_RETRIES:-3}
+      - GEMINI_RETRY_DELAY=${GEMINI_RETRY_DELAY:-1.0}
+      - RATE_LIMIT_PER_MINUTE=${RATE_LIMIT_PER_MINUTE:-30}
+      - ENABLE_RERANKING=${ENABLE_RERANKING:-true}
+      - RERANK_CANDIDATES=${RERANK_CANDIDATES:-30}
+      - HYBRID_ALPHA=${HYBRID_ALPHA:-0.7}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - ENABLE_QUERY_LOG=${ENABLE_QUERY_LOG:-true}
+    depends_on:
+      qdrant:
+        condition: service_healthy
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: "2"
+
+  # === INDEXER ===
+  indexer:
+    build:
+      context: .
+      dockerfile: Dockerfile.indexer
+    container_name: indexer
+    volumes:
+      - ${REPOS_HOST_PATH}:/data/repos:ro
+    environment:
+      - QDRANT_URL=http://qdrant:6333
+      - COLLECTION_NAME=${COLLECTION_NAME:-codebase}
+      - REPOS_PATH=/data/repos
+      - CHUNK_MAX_CHARS=${CHUNK_MAX_CHARS:-1500}
+    depends_on:
+      qdrant:
+        condition: service_healthy
+    profiles:
+      - tools
+
+  # === BACKUP QDRANT ===
+  backup:
+    image: curlimages/curl:latest
+    container_name: qdrant-backup
+    entrypoint: >
+      sh -c "curl -s -X POST http://qdrant:6333/collections/$${COLLECTION_NAME}/snapshots &&
+             echo 'Backup completato: '$(date)"
+    environment:
+      - COLLECTION_NAME=${COLLECTION_NAME:-codebase}
+    depends_on:
+      qdrant:
+        condition: service_healthy
+    profiles:
+      - tools
+
+volumes:
+  open-webui-data:
+  qdrant-data:
+  qdrant-snapshots:
+  logs-data:
