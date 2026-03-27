@@ -1,6 +1,6 @@
 services:
 
-  # === QDRANT — Database vettoriale ===
+  # === QDRANT — Vector database ===
   qdrant:
     image: qdrant/qdrant:latest
     container_name: rag-qdrant
@@ -21,7 +21,7 @@ services:
           memory: 2G
           cpus: "2"
 
-  # === OPEN WEBUI — Interfaccia chat ===
+  # === OPEN WEBUI — Chat interface ===
   open-webui:
     image: ghcr.io/open-webui/open-webui:main
     container_name: open-webui
@@ -42,7 +42,7 @@ services:
           memory: 1G
           cpus: "1"
 
-  # === RAG PROXY — FastAPI con RAG + Gemini ===
+  # === RAG PROXY — FastAPI with RAG + Gemini ===
   rag-proxy:
     build:
       context: .

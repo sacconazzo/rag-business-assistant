@@ -1,6 +1,6 @@
 """
-Indexer — Scansiona i repository e indicizza in Qdrant.
-Esegui con: docker compose run --rm indexer
+Indexer — Scans repositories and indexes them into Qdrant.
+Run with: docker compose run --rm indexer
 """
 
 import os
@@ -56,7 +56,7 @@ MAX_FILE_SIZE = 100_000
 
 
 def _get_overlap_lines(lines: list[str], max_overlap: int) -> tuple[list[str], int]:
-    """Restituisce (overlap_lines, overlap_length) dalla fine delle righe date."""
+    """Returns (overlap_lines, overlap_length) from the end of the given lines."""
     if max_overlap <= 0 or not lines:
         return [], 0
     overlap_lines = []
@@ -124,13 +124,13 @@ def should_skip(filepath: str) -> bool:
 
 def scan_repos(repos_path: str) -> list[dict]:
     if not os.path.exists(repos_path):
-        print(f"❌ Cartella non trovata: {repos_path}")
+        print(f"❌ Folder not found: {repos_path}")
         sys.exit(1)
 
     repo_dirs = sorted([d for d in os.listdir(repos_path) if os.path.isdir(os.path.join(repos_path, d)) and not d.startswith(".")])
     if not repo_dirs:
-        print(f"❌ Nessun repository in: {repos_path}")
-        print(f"   Controlla REPOS_HOST_PATH nel .env")
+        print(f"❌ No repositories in: {repos_path}")
+        print(f"   Check REPOS_HOST_PATH in .env")
         sys.exit(1)
 
     documenti = []
@@ -180,7 +180,7 @@ def indicizza(documenti: list[dict]):
         print(f"🗑️  Drop collection: {COLLECTION_NAME}")
         client.delete_collection(COLLECTION_NAME)
 
-    print(f"📦 Creazione collection: {COLLECTION_NAME} (dim={vector_size})")
+    print(f"📦 Creating collection: {COLLECTION_NAME} (dim={vector_size})")
     quantization = ScalarQuantization(
         scalar=ScalarQuantizationConfig(type=ScalarType.INT8, always_ram=True)
     ) if ENABLE_QUANTIZATION else None
@@ -191,7 +191,7 @@ def indicizza(documenti: list[dict]):
         quantization_config=quantization,
     )
 
-    # Indici per filtri e full-text search
+    # Indexes for filters and full-text search
     client.create_payload_index(collection_name=COLLECTION_NAME, field_name="repo", field_schema=PayloadSchemaType.KEYWORD)
     client.create_payload_index(collection_name=COLLECTION_NAME, field_name="extension", field_schema=PayloadSchemaType.KEYWORD)
     client.create_payload_index(collection_name=COLLECTION_NAME, field_name="file", field_schema=PayloadSchemaType.KEYWORD)
@@ -231,12 +231,12 @@ def main():
     t = time.time()
     docs = scan_repos(REPOS_PATH)
     if not docs:
-        print("❌ Nessun documento!")
+        print("❌ No documents found!")
         sys.exit(1)
 
-    print(f"\n📊 {len(docs)} chunk da indicizzare")
+    print(f"\n📊 {len(docs)} chunks to index")
     n = indicizza(docs)
-    print(f"\n✅ Completato in {time.time() - t:.1f}s — {n} vettori")
+    print(f"\n✅ Completed in {time.time() - t:.1f}s — {n} vectors")
     print("=" * 60)
 
 

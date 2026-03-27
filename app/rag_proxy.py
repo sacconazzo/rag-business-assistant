@@ -1,8 +1,8 @@
 """
 RAG Proxy — Production
-Resilienza (retry, rate limit, circuit breaker)
-Osservabilità (logging strutturato, metriche, costi)
-Qualità RAG (hybrid search, reranking con cross-encoder)
+Resilience (retry, rate limit, circuit breaker)
+Observability (structured logging, metrics, cost tracking)
+RAG quality (hybrid search, reranking with cross-encoder)
 """
 
 import os
@@ -38,33 +38,33 @@ EMBEDDING_QUERY_PREFIX = os.getenv("EMBEDDING_QUERY_PREFIX", "Represent this sen
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 ENABLE_QUERY_LOG = os.getenv("ENABLE_QUERY_LOG", "true").lower() == "true"
 
-# Resilienza
+# Resilience
 GEMINI_MAX_RETRIES = int(os.getenv("GEMINI_MAX_RETRIES", "3"))
 GEMINI_RETRY_DELAY = float(os.getenv("GEMINI_RETRY_DELAY", "1.0"))
 RATE_LIMIT_PER_MINUTE = int(os.getenv("RATE_LIMIT_PER_MINUTE", "30"))
 
-# RAG avanzato
+# Advanced RAG
 ENABLE_RERANKING = os.getenv("ENABLE_RERANKING", "true").lower() == "true"
 RERANK_CANDIDATES = int(os.getenv("RERANK_CANDIDATES", "30"))
 HYBRID_ALPHA = float(os.getenv("HYBRID_ALPHA", "0.65"))
 RERANKER_MODEL = os.getenv("RERANKER_MODEL", "cross-encoder/ms-marco-MiniLM-L-6-v2")
 RERANK_TRUNCATE = int(os.getenv("RERANK_TRUNCATE", "512"))
 
-SYSTEM_PROMPT = """Sei un assistente esperto della nostra codebase aziendale.
-Rispondi alle domande sulla logica di business basandoti ESCLUSIVAMENTE
-sui frammenti di codice e documentazione forniti come contesto.
+SYSTEM_PROMPT = """You are an expert assistant for our business codebase.
+Answer questions about business logic based EXCLUSIVELY on the code
+snippets and documentation provided as context.
 
-Regole:
-- Se il contesto non contiene informazioni sufficienti, dillo chiaramente.
-- Cita il file e il repository da cui prendi le informazioni.
-- Spiega la logica in modo chiaro, come se parlassi con un collega.
-- Se trovi incongruenze nel codice, segnalale.
-- Rispondi nella stessa lingua della domanda.
+Rules:
+- If the context does not contain enough information, say so clearly.
+- Cite the file and repository from which you take the information.
+- Explain the logic clearly, as if talking to a colleague.
+- If you find inconsistencies in the code, point them out.
+- Reply in the same language as the question.
 """
 
 
 # ============================================================
-# LOGGING STRUTTURATO
+# STRUCTURED LOGGING
 # ============================================================
 
 logging.basicConfig(
@@ -76,7 +76,7 @@ logger = logging.getLogger("rag-proxy")
 
 
 class QueryLogger:
-    """Scrive ogni query in un file JSONL per analisi successive."""
+    """Writes each query to a JSONL file for later analysis."""
 
     def __init__(self, log_dir="/app/logs"):
         self.log_dir = log_dir
@@ -91,14 +91,14 @@ class QueryLogger:
             with open(self.log_file, "a") as f:
                 f.write(json.dumps(entry, ensure_ascii=False) + "\n")
         except Exception as e:
-            logger.error(f"Errore scrittura log: {e}")
+            logger.error(f"Log write error: {e}")
 
 
 query_logger = QueryLogger()
 
 
 # ============================================================
-# METRICHE
+# METRICS
 # ============================================================
 
 class Metrics:
@@ -141,7 +141,7 @@ class Metrics:
         avg_latency = sum(self.latencies) / len(self.latencies) if self.latencies else 0
         avg_rag = sum(self.rag_latencies) / len(self.rag_latencies) if self.rag_latencies else 0
 
-        # Stima costi Gemini Flash ($/M token): input=0.075, output=0.30
+        # Estimated Gemini Flash costs ($/M token): input=0.075, output=0.30
         cost_in = (self.total_tokens_in / 1_000_000) * 0.075
         cost_out = (self.total_tokens_out / 1_000_000) * 0.30
 
@@ -310,7 +310,7 @@ async def lifespan(app: FastAPI):
     qdrant = QdrantClient(url=QDRANT_URL, timeout=30)
     collections = [c.name for c in qdrant.get_collections().collections]
     count = qdrant.count(COLLECTION_NAME).count if COLLECTION_NAME in collections else 0
-    logger.info(f"Qdrant: {QDRANT_URL} — {count} vettori")
+    logger.info(f"Qdrant: {QDRANT_URL} — {count} vectors")
 
     embedder = SentenceTransformer(EMBEDDING_MODEL)
     logger.info(f"Embedding: {EMBEDDING_MODEL} (dim={embedder.get_sentence_embedding_dimension()})")
@@ -320,7 +320,7 @@ async def lifespan(app: FastAPI):
         logger.info(f"Reranker: {RERANKER_MODEL}")
 
     if not GEMINI_API_KEY:
-        raise ValueError("GEMINI_API_KEY obbligatoria")
+        raise ValueError("GEMINI_API_KEY is required")
     genai.configure(api_key=GEMINI_API_KEY)
     gemini_model = genai.GenerativeModel(model_name=GEMINI_MODEL, system_instruction=SYSTEM_PROMPT)
     logger.info(f"Gemini: {GEMINI_MODEL}")
@@ -339,15 +339,15 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 
 def cerca_contesto(domanda: str, n_risultati: int = MAX_RISULTATI) -> list[dict]:
     """
-    1. Ricerca vettoriale (semantica)
-    2. Ricerca full-text (keyword)
-    3. Fusione con peso HYBRID_ALPHA
-    4. Reranking con cross-encoder
+    1. Vector search (semantic)
+    2. Full-text search (keyword)
+    3. Fusion with HYBRID_ALPHA weight
+    4. Reranking with cross-encoder
     """
     query_vector = embedder.encode(EMBEDDING_QUERY_PREFIX + domanda).tolist()
     candidates = RERANK_CANDIDATES if ENABLE_RERANKING else n_risultati
 
-    # --- Ricerca vettoriale ---
+    # --- Vector search ---
     vector_results = qdrant.query_points(
         collection_name=COLLECTION_NAME,
         query=query_vector,
@@ -355,7 +355,7 @@ def cerca_contesto(domanda: str, n_risultati: int = MAX_RISULTATI) -> list[dict]
         with_payload=True,
     ).points
 
-    # --- Ricerca full-text ---
+    # --- Full-text search ---
     text_results = []
     try:
         scroll_result = qdrant.scroll(
@@ -369,7 +369,7 @@ def cerca_contesto(domanda: str, n_risultati: int = MAX_RISULTATI) -> list[dict]
     except Exception as e:
         logger.debug(f"Full-text fallback: {e}")
 
-    # --- Fusione ---
+    # --- Fusion ---
     seen_ids = set()
     merged = []
 
@@ -398,7 +398,7 @@ def cerca_contesto(domanda: str, n_risultati: int = MAX_RISULTATI) -> list[dict]
                 "source": "text",
             })
         else:
-            # Boost per risultati presenti in entrambe le ricerche
+            # Boost for results appearing in both searches
             for m in merged:
                 if m["id"] == point.id:
                     m["score"] += (1 - HYBRID_ALPHA) * 0.5
@@ -474,14 +474,14 @@ async def chat_completions(request: Request):
     # Rate limit
     if not rate_limiter.check(client_ip):
         metrics.record_error("rate_limit")
-        raise HTTPException(status_code=429, detail="Troppe richieste. Riprova tra un minuto.", headers={"Retry-After": "60"})
+        raise HTTPException(status_code=429, detail="Too many requests. Please retry in a minute.", headers={"Retry-After": "60"})
 
     body = await request.json()
     messages = body.get("messages", [])
     stream = body.get("stream", False)
 
     if not messages:
-        raise HTTPException(status_code=400, detail="Nessun messaggio")
+        raise HTTPException(status_code=400, detail="No messages")
 
     domanda = ""
     for msg in reversed(messages):
@@ -489,7 +489,7 @@ async def chat_completions(request: Request):
             domanda = msg.get("content", "")
             break
     if not domanda:
-        raise HTTPException(status_code=400, detail="Nessuna domanda")
+        raise HTTPException(status_code=400, detail="No question found")
 
     # --- RAG ---
     contesto_completo = ""
@@ -509,13 +509,13 @@ async def chat_completions(request: Request):
             n_fonti = len(blocchi)
         rag_ms = (time.time() - rag_start) * 1000
     except Exception as e:
-        logger.error(f"Errore RAG: {e}")
+        logger.error(f"RAG error: {e}")
         metrics.record_error("rag_error")
 
     # --- Prompt ---
     history = openai_to_gemini_history(messages[:-1])
     user_content = (
-        f"Contesto dalla codebase ({n_fonti} frammenti):\n\n{contesto_completo}\n\n---\n\nDomanda: {domanda}"
+        f"Context from codebase ({n_fonti} snippets):\n\n{contesto_completo}\n\n---\n\nQuestion: {domanda}"
         if contesto_completo else domanda
     )
 
@@ -555,8 +555,8 @@ async def chat_completions(request: Request):
         raise
     except Exception as e:
         metrics.record_error(type(e).__name__)
-        logger.error(f"Errore Gemini: {e}")
-        raise HTTPException(status_code=502, detail=f"Errore Gemini: {str(e)}")
+        logger.error(f"Gemini error: {e}")
+        raise HTTPException(status_code=502, detail=f"Gemini error: {str(e)}")
 
 
 async def _stream_gemini(chat, user_content: str, domanda: str, start_time: float, rag_ms: float, n_fonti: int):
@@ -582,12 +582,12 @@ async def _stream_gemini(chat, user_content: str, domanda: str, start_time: floa
 
     except Exception as e:
         metrics.record_error(type(e).__name__)
-        yield f"data: {json.dumps({'id': chat_id, 'object': 'chat.completion.chunk', 'created': int(time.time()), 'model': 'business-assistant', 'choices': [{'index': 0, 'delta': {'content': f'\\n\\n⚠️ Errore: {str(e)}'}, 'finish_reason': 'stop'}]})}\n\n"
+        yield f"data: {json.dumps({'id': chat_id, 'object': 'chat.completion.chunk', 'created': int(time.time()), 'model': 'business-assistant', 'choices': [{'index': 0, 'delta': {'content': f'\\n\\n⚠️ Error: {str(e)}'}, 'finish_reason': 'stop'}]})}\n\n"
         yield "data: [DONE]\n\n"
 
 
 # ============================================================
-# ENDPOINTS OPERATIVI
+# OPERATIONAL ENDPOINTS
 # ============================================================
 
 @app.get("/health")
@@ -604,7 +604,7 @@ async def health():
 
     return {
         "status": "ok" if qdrant_ok else "degraded",
-        "qdrant": {"status": "ok" if qdrant_ok else "error", "vettori": count},
+        "qdrant": {"status": "ok" if qdrant_ok else "error", "vectors": count},
         "gemini": {"model": GEMINI_MODEL, "circuit_breaker": circuit_breaker.state},
         "rag": {"reranking": ENABLE_RERANKING, "hybrid_alpha": HYBRID_ALPHA, "reranker_model": RERANKER_MODEL if ENABLE_RERANKING else None},
     }
@@ -622,12 +622,12 @@ async def stats():
         return {
             "collection": {
                 "name": COLLECTION_NAME,
-                "vettori": info.points_count,
-                "indicizzati": info.indexed_vectors_count,
-                "dimensione_vettore": info.config.params.vectors.size,
-                "distanza": info.config.params.vectors.distance.value,
+                "vectors": info.points_count,
+                "indexed": info.indexed_vectors_count,
+                "vector_size": info.config.params.vectors.size,
+                "distance": info.config.params.vectors.distance.value,
             },
-            "metriche": metrics.summary(),
+            "metrics": metrics.summary(),
         }
     except Exception as e:
         return {"error": str(e)}
