@@ -106,7 +106,7 @@ After search, a **cross-encoder** (ms-marco-MiniLM-L-6-v2) re-evaluates each res
 Configurable: `ENABLE_RERANKING=true/false`, `RERANK_CANDIDATES=30` (how many candidates to evaluate).
 
 ### Smart Chunking
-Code is split into logical blocks (functions, classes, methods), not fixed lines. Each chunk includes the filename as a header to preserve context.
+Code is split into logical blocks (functions, classes, methods), not fixed lines. Each chunk includes the file path as a header to preserve context. Consecutive chunks overlap by `CHUNK_OVERLAP_CHARS` characters (default 200) to avoid losing context at chunk boundaries.
 
 ---
 
@@ -227,9 +227,18 @@ curl -X POST http://localhost:8001/reindex
 | `REPOS_HOST_PATH` | (required) | Path to repositories folder |
 | `GEMINI_MODEL` | `gemini-2.5-flash` | Gemini model |
 | `MAX_RISULTATI` | `8` | Chunks in context |
+| `CHUNK_MAX_CHARS` | `1500` | Maximum chunk size (chars) |
+| `CHUNK_OVERLAP_CHARS` | `200` | Overlap between consecutive chunks (chars) |
 | `ENABLE_RERANKING` | `true` | Cross-encoder reranking |
 | `RERANK_CANDIDATES` | `30` | Pre-reranking candidates |
+| `RERANKER_MODEL` | `cross-encoder/ms-marco-MiniLM-L-6-v2` | Cross-encoder model |
+| `RERANK_TRUNCATE` | `512` | Max chars passed to reranker |
 | `HYBRID_ALPHA` | `0.7` | Vector vs full-text weight |
+| `EMBEDDING_MODEL` | `all-mpnet-base-v2` | Sentence-transformer model |
+| `BATCH_SIZE` | `128` | Indexing batch size |
+| `HNSW_M` | `16` | HNSW connections per node |
+| `HNSW_EF` | `128` | HNSW construction candidates |
+| `ENABLE_QUANTIZATION` | `true` | Scalar INT8 quantization |
 | `GEMINI_MAX_RETRIES` | `3` | Retries on error |
 | `GEMINI_RETRY_DELAY` | `1.0` | Base retry delay (sec) |
 | `RATE_LIMIT_PER_MINUTE` | `30` | Max requests/min per IP |

@@ -65,6 +65,9 @@ services:
       - ENABLE_RERANKING=${ENABLE_RERANKING:-true}
       - RERANK_CANDIDATES=${RERANK_CANDIDATES:-30}
       - HYBRID_ALPHA=${HYBRID_ALPHA:-0.7}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-all-mpnet-base-v2}
+      - RERANKER_MODEL=${RERANKER_MODEL:-cross-encoder/ms-marco-MiniLM-L-6-v2}
+      - RERANK_TRUNCATE=${RERANK_TRUNCATE:-512}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - ENABLE_QUERY_LOG=${ENABLE_QUERY_LOG:-true}
     depends_on:
@@ -90,6 +93,12 @@ services:
       - COLLECTION_NAME=${COLLECTION_NAME:-codebase}
       - REPOS_PATH=/data/repos
       - CHUNK_MAX_CHARS=${CHUNK_MAX_CHARS:-1500}
+      - CHUNK_OVERLAP_CHARS=${CHUNK_OVERLAP_CHARS:-200}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-all-mpnet-base-v2}
+      - BATCH_SIZE=${BATCH_SIZE:-128}
+      - HNSW_M=${HNSW_M:-16}
+      - HNSW_EF=${HNSW_EF:-128}
+      - ENABLE_QUANTIZATION=${ENABLE_QUANTIZATION:-true}
     depends_on:
       qdrant:
         condition: service_healthy

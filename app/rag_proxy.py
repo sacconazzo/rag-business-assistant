@@ -33,7 +33,6 @@ GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
 COLLECTION_NAME = os.getenv("COLLECTION_NAME", "codebase")
 MAX_RISULTATI = int(os.getenv("MAX_RISULTATI", "8"))
-# EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2")
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "all-mpnet-base-v2")
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 ENABLE_QUERY_LOG = os.getenv("ENABLE_QUERY_LOG", "true").lower() == "true"
@@ -47,6 +46,8 @@ RATE_LIMIT_PER_MINUTE = int(os.getenv("RATE_LIMIT_PER_MINUTE", "30"))
 ENABLE_RERANKING = os.getenv("ENABLE_RERANKING", "true").lower() == "true"
 RERANK_CANDIDATES = int(os.getenv("RERANK_CANDIDATES", "30"))
 HYBRID_ALPHA = float(os.getenv("HYBRID_ALPHA", "0.7"))
+RERANKER_MODEL = os.getenv("RERANKER_MODEL", "cross-encoder/ms-marco-MiniLM-L-6-v2")
+RERANK_TRUNCATE = int(os.getenv("RERANK_TRUNCATE", "512"))
 
 SYSTEM_PROMPT = """Sei un assistente esperto della nostra codebase aziendale.
 Rispondi alle domande sulla logica di business basandoti ESCLUSIVAMENTE
@@ -314,8 +315,8 @@ async def lifespan(app: FastAPI):
     logger.info(f"Embedding: {EMBEDDING_MODEL} (dim={embedder.get_sentence_embedding_dimension()})")
 
     if ENABLE_RERANKING:
-        reranker = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
-        logger.info("Reranker: ms-marco-MiniLM-L-6-v2")
+        reranker = CrossEncoder(RERANKER_MODEL)
+        logger.info(f"Reranker: {RERANKER_MODEL}")
 
     if not GEMINI_API_KEY:
         raise ValueError("GEMINI_API_KEY obbligatoria")
@@ -405,7 +406,7 @@ def cerca_contesto(domanda: str, n_risultati: int = MAX_RISULTATI) -> list[dict]
 
     # --- Reranking ---
     if ENABLE_RERANKING and reranker and merged:
-        pairs = [(domanda, m["content"][:512]) for m in merged]
+        pairs = [(domanda, m["content"][:RERANK_TRUNCATE]) for m in merged]
         scores = reranker.predict(pairs)
         for m, s in zip(merged, scores):
             m["rerank_score"] = float(s)
@@ -604,7 +605,7 @@ async def health():
         "status": "ok" if qdrant_ok else "degraded",
         "qdrant": {"status": "ok" if qdrant_ok else "error", "vettori": count},
         "gemini": {"model": GEMINI_MODEL, "circuit_breaker": circuit_breaker.state},
-        "rag": {"reranking": ENABLE_RERANKING, "hybrid_alpha": HYBRID_ALPHA},
+        "rag": {"reranking": ENABLE_RERANKING, "hybrid_alpha": HYBRID_ALPHA, "reranker_model": RERANKER_MODEL if ENABLE_RERANKING else None},
     }
 
 

@@ -13,6 +13,7 @@ from qdrant_client import QdrantClient
 from qdrant_client.models import (
     Distance, VectorParams, PointStruct,
     PayloadSchemaType, TextIndexParams, TokenizerType,
+    HnswConfigDiff, ScalarQuantization, ScalarQuantizationConfig, ScalarType,
 )
 from sentence_transformers import SentenceTransformer
 
@@ -20,8 +21,12 @@ QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
 COLLECTION_NAME = os.getenv("COLLECTION_NAME", "codebase")
 REPOS_PATH = os.getenv("REPOS_PATH", "./repos")
 CHUNK_MAX_CHARS = int(os.getenv("CHUNK_MAX_CHARS", "1500"))
-# EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2")
+CHUNK_OVERLAP_CHARS = int(os.getenv("CHUNK_OVERLAP_CHARS", "200"))
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "all-mpnet-base-v2")
+BATCH_SIZE = int(os.getenv("BATCH_SIZE", "128"))
+HNSW_M = int(os.getenv("HNSW_M", "16"))
+HNSW_EF = int(os.getenv("HNSW_EF", "128"))
+ENABLE_QUANTIZATION = os.getenv("ENABLE_QUANTIZATION", "true").lower() == "true"
 
 FILE_EXTENSIONS = [
     "*.py", "*.js", "*.ts", "*.tsx", "*.jsx",
@@ -50,9 +55,24 @@ SKIP_FILES = {
 MAX_FILE_SIZE = 100_000
 
 
-def chunk_codice(testo: str, filepath: str, max_chars: int = CHUNK_MAX_CHARS) -> list[str]:
-    filename = os.path.basename(filepath)
-    header = f"# File: {filename}\n"
+def _get_overlap_lines(lines: list[str], max_overlap: int) -> tuple[list[str], int]:
+    """Returns (overlap_lines, overlap_length) from the end of the given lines."""
+    if max_overlap <= 0 or not lines:
+        return [], 0
+    overlap_lines = []
+    overlap_len = 0
+    for line in reversed(lines):
+        overlap_len += len(line) + 1
+        overlap_lines.append(line)
+        if overlap_len >= max_overlap:
+            break
+    overlap_lines.reverse()
+    return overlap_lines, overlap_len
+
+
+def chunk_codice(testo: str, filepath: str, max_chars: int = CHUNK_MAX_CHARS,
+                 overlap: int = CHUNK_OVERLAP_CHARS) -> list[str]:
+    header = f"# File: {filepath}\n"
     righe = testo.split("\n")
     chunks, chunk_corrente, lunghezza = [], [], 0
 
@@ -70,14 +90,16 @@ def chunk_codice(testo: str, filepath: str, max_chars: int = CHUNK_MAX_CHARS) ->
     for riga in righe:
         if any(riga.strip().startswith(s) for s in block_starters) and lunghezza > max_chars // 3:
             chunks.append(header + "\n".join(chunk_corrente))
-            chunk_corrente, lunghezza = [], 0
+            overlap_lines, overlap_len = _get_overlap_lines(chunk_corrente, overlap)
+            chunk_corrente, lunghezza = overlap_lines, overlap_len
 
         chunk_corrente.append(riga)
         lunghezza += len(riga) + 1
 
         if lunghezza >= max_chars:
             chunks.append(header + "\n".join(chunk_corrente))
-            chunk_corrente, lunghezza = [], 0
+            overlap_lines, overlap_len = _get_overlap_lines(chunk_corrente, overlap)
+            chunk_corrente, lunghezza = overlap_lines, overlap_len
 
     if chunk_corrente:
         chunks.append(header + "\n".join(chunk_corrente))
@@ -127,7 +149,7 @@ def scan_repos(repos_path: str) -> list[dict]:
 
                 file_count += 1
                 rel_path = os.path.relpath(filepath, repos_path)
-                for i, chunk in enumerate(chunk_codice(contenuto, filepath)):
+                for i, chunk in enumerate(chunk_codice(contenuto, rel_path)):
                     documenti.append({
                         "id": hashlib.md5(f"{rel_path}::chunk_{i}".encode()).hexdigest(),
                         "content": chunk,
@@ -156,20 +178,25 @@ def indicizza(documenti: list[dict]):
         client.delete_collection(COLLECTION_NAME)
 
     print(f"📦 Creazione collection: {COLLECTION_NAME} (dim={vector_size})")
+    quantization = ScalarQuantization(
+        scalar=ScalarQuantizationConfig(type=ScalarType.INT8, always_ram=True)
+    ) if ENABLE_QUANTIZATION else None
     client.create_collection(
         collection_name=COLLECTION_NAME,
         vectors_config=VectorParams(size=vector_size, distance=Distance.COSINE),
+        hnsw_config=HnswConfigDiff(m=HNSW_M, ef_construct=HNSW_EF),
+        quantization_config=quantization,
     )
 
     # Indici per filtri e full-text search
     client.create_payload_index(collection_name=COLLECTION_NAME, field_name="repo", field_schema=PayloadSchemaType.KEYWORD)
     client.create_payload_index(collection_name=COLLECTION_NAME, field_name="extension", field_schema=PayloadSchemaType.KEYWORD)
+    client.create_payload_index(collection_name=COLLECTION_NAME, field_name="file", field_schema=PayloadSchemaType.KEYWORD)
     client.create_payload_index(
         collection_name=COLLECTION_NAME, field_name="content",
-        field_schema=TextIndexParams(type="text", tokenizer=TokenizerType.WORD, min_token_len=2, max_token_len=20),
+        field_schema=TextIndexParams(type="text", tokenizer=TokenizerType.WORD, min_token_len=2, max_token_len=20, lowercase=True),
     )
 
-    BATCH_SIZE = 128
     total = len(documenti)
     for start in range(0, total, BATCH_SIZE):
         end = min(start + BATCH_SIZE, total)
@@ -194,7 +221,8 @@ def main():
     print("=" * 60)
     print(f"📁 {REPOS_PATH}")
     print(f"🔗 {QDRANT_URL}")
-    print(f"✂️  chunk max: {CHUNK_MAX_CHARS} chars")
+    print(f"✂️  chunk max: {CHUNK_MAX_CHARS} chars, overlap: {CHUNK_OVERLAP_CHARS} chars")
+    print(f"🔧 HNSW m={HNSW_M} ef={HNSW_EF}, quantization={'on' if ENABLE_QUANTIZATION else 'off'}")
     print()
 
     t = time.time()
