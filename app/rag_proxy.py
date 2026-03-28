@@ -312,7 +312,7 @@ async def lifespan(app: FastAPI):
     count = qdrant.count(COLLECTION_NAME).count if COLLECTION_NAME in collections else 0
     logger.info(f"Qdrant: {QDRANT_URL} — {count} vectors")
 
-    embedder = SentenceTransformer(EMBEDDING_MODEL)
+    embedder = SentenceTransformer(EMBEDDING_MODEL, model_kwargs={"attn_implementation": "eager"})
     logger.info(f"Embedding: {EMBEDDING_MODEL} (dim={embedder.get_sentence_embedding_dimension()})")
 
     if ENABLE_RERANKING:

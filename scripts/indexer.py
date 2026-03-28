@@ -172,7 +172,7 @@ def indicizza(documenti: list[dict]):
     client = QdrantClient(url=QDRANT_URL)
 
     print(f"🧠 Embedding: {EMBEDDING_MODEL}")
-    embedder = SentenceTransformer(EMBEDDING_MODEL)
+    embedder = SentenceTransformer(EMBEDDING_MODEL, model_kwargs={"attn_implementation": "eager"})
     vector_size = embedder.get_sentence_embedding_dimension()
 
     collections = [c.name for c in client.get_collections().collections]
