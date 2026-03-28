@@ -342,6 +342,36 @@ qdrant: QdrantClient = None
 embedder: SentenceTransformer = None
 reranker: CrossEncoder = None
 gemini_model = None
+known_repos: set[str] = set()
+
+
+def _load_known_repos():
+    """Load distinct repo names from Qdrant for natural language repo detection."""
+    global known_repos
+    try:
+        collections = [c.name for c in qdrant.get_collections().collections]
+        if COLLECTION_NAME not in collections:
+            return
+        repos = set()
+        offset = None
+        while True:
+            results, offset = qdrant.scroll(
+                collection_name=COLLECTION_NAME,
+                limit=500,
+                offset=offset,
+                with_payload=["repo"],
+                with_vectors=False,
+            )
+            for point in results:
+                repo = point.payload.get("repo", "")
+                if repo:
+                    repos.add(repo)
+            if offset is None:
+                break
+        known_repos = repos
+        logger.info(f"Known repos: {sorted(known_repos)}")
+    except Exception as e:
+        logger.warning(f"Could not load repo list: {e}")
 
 
 @asynccontextmanager
@@ -365,6 +395,8 @@ async def lifespan(app: FastAPI):
     genai.configure(api_key=GEMINI_API_KEY)
     gemini_model = genai.GenerativeModel(model_name=GEMINI_MODEL, system_instruction=SYSTEM_PROMPT)
     logger.info(f"Gemini: {GEMINI_MODEL}")
+
+    _load_known_repos()
 
     yield
     logger.info("Shutdown")
@@ -498,13 +530,27 @@ def get_client_ip(request: Request) -> str:
     return forwarded.split(",")[0].strip() if forwarded else (request.client.host if request.client else "unknown")
 
 
-def _extract_repo_filter(domanda: str) -> tuple[str, str | None]:
-    """Extract optional repo: filter from question. Returns (cleaned_question, repo_name)."""
-    import re
-    match = re.match(r"^repo:(\S+)\s+(.+)$", domanda, re.DOTALL)
-    if match:
-        return match.group(2).strip(), match.group(1)
-    return domanda, None
+def _detect_repo_filter(domanda: str) -> tuple[str, str | None]:
+    """Detect repo name mentioned in the question using known repo names from Qdrant.
+
+    Matches natural language like:
+      "nel repo my-api come funziona l'auth?"
+      "in payment-service how does checkout work?"
+      "how does auth work in my-api?"
+    """
+    if not known_repos:
+        return domanda, None
+
+    domanda_lower = domanda.lower()
+
+    # Find the best (longest) matching repo name in the question
+    best_match = None
+    for repo in known_repos:
+        if repo.lower() in domanda_lower:
+            if best_match is None or len(repo) > len(best_match):
+                best_match = repo
+
+    return domanda, best_match
 
 
 # ============================================================
@@ -550,8 +596,8 @@ async def chat_completions(request: Request):
     if not domanda:
         raise HTTPException(status_code=400, detail="No question found")
 
-    # Extract optional repo filter (e.g. "repo:my-app how does auth work?")
-    domanda_clean, repo_filter = _extract_repo_filter(domanda)
+    # Detect repo name mentioned naturally in the question
+    domanda_clean, repo_filter = _detect_repo_filter(domanda)
 
     # --- RAG ---
     contesto_completo = ""
@@ -752,6 +798,8 @@ async def reindex():
                 capture_output=True, text=True, timeout=600,
                 env={**os.environ, "QDRANT_URL": QDRANT_URL, "REPOS_PATH": "/data/repos"},
             )
+            if result.returncode == 0:
+                _load_known_repos()
             return {"status": "ok" if result.returncode == 0 else "error", "output": result.stdout[-1000:], "errors": result.stderr[-500:]}
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
