@@ -55,7 +55,7 @@ RERANK_TRUNCATE = int(os.getenv("RERANK_TRUNCATE", "1024"))
 QUERY_LOG_MAX_SIZE_MB = int(os.getenv("QUERY_LOG_MAX_SIZE_MB", "50"))
 
 # System prompt (configurable)
-SYSTEM_PROMPT = os.getenv("SYSTEM_PROMPT", """You are an expert assistant for our business codebase.
+_DEFAULT_SYSTEM_PROMPT = """You are an expert assistant for our business codebase.
 Answer questions about business logic based EXCLUSIVELY on the code
 snippets and documentation provided as context.
 
@@ -65,7 +65,8 @@ Rules:
 - Explain the logic clearly, as if talking to a colleague.
 - If you find inconsistencies in the code, point them out.
 - Reply in the same language as the question.
-""")
+"""
+SYSTEM_PROMPT = os.getenv("SYSTEM_PROMPT") or _DEFAULT_SYSTEM_PROMPT
 
 
 # ============================================================
