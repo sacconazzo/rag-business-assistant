@@ -533,22 +533,53 @@ def get_client_ip(request: Request) -> str:
 def _detect_repo_filter(domanda: str) -> tuple[str, str | None]:
     """Detect repo name mentioned in the question using known repo names from Qdrant.
 
-    Matches natural language like:
-      "nel repo my-api come funziona l'auth?"
-      "in payment-service how does checkout work?"
-      "how does auth work in my-api?"
+    Supports:
+      - Exact match: "in payment-service how does checkout work?"
+      - Partial match: "in payment come funziona il checkout?"
+        (matches "my-company-payment-service-v2" if "payment" is a segment)
+
+    Segments are split on '-', '_', '.', '/' so "payment" matches a repo
+    named "acme-payment-service" but not "acme-repayment-tool".
     """
     if not known_repos:
         return domanda, None
 
+    import re
     domanda_lower = domanda.lower()
+    # Extract candidate words (2+ chars, alphanumeric/hyphens) from question
+    domanda_words = set(re.findall(r"[a-z0-9](?:[a-z0-9\-_.]*[a-z0-9])?", domanda_lower))
 
-    # Find the best (longest) matching repo name in the question
     best_match = None
+    best_score = 0  # number of matching segments
+
     for repo in known_repos:
-        if repo.lower() in domanda_lower:
-            if best_match is None or len(repo) > len(best_match):
+        repo_lower = repo.lower()
+
+        # 1) Exact full-name match (highest priority)
+        if repo_lower in domanda_lower:
+            seg_count = len(re.split(r"[-_./]", repo_lower))
+            if best_match is None or seg_count > best_score or (seg_count == best_score and len(repo) > len(best_match)):
                 best_match = repo
+                best_score = seg_count
+            continue
+
+        # 2) Partial: check how many repo segments appear as words in the question
+        repo_segments = set(re.split(r"[-_./]", repo_lower))
+        repo_segments.discard("")
+        # Only consider segments with 3+ chars to avoid false positives
+        meaningful_segments = {s for s in repo_segments if len(s) >= 3}
+        if not meaningful_segments:
+            continue
+
+        matched = meaningful_segments & domanda_words
+        if len(matched) >= 1 and len(matched) / len(meaningful_segments) >= 0.4:
+            score = len(matched)
+            if score > best_score or (score == best_score and best_match and len(repo) > len(best_match)):
+                best_match = repo
+                best_score = score
+
+    if best_match:
+        logger.debug(f"Repo filter detected: '{best_match}' (score={best_score})")
 
     return domanda, best_match
 
