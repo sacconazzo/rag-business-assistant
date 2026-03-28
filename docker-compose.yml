@@ -66,7 +66,7 @@ services:
       - RERANK_CANDIDATES=${RERANK_CANDIDATES:-30}
       - HYBRID_ALPHA=${HYBRID_ALPHA:-0.65}
       - EMBEDDING_MODEL=${EMBEDDING_MODEL:-BAAI/bge-base-en-v1.5}
-      - EMBEDDING_QUERY_PREFIX=${EMBEDDING_QUERY_PREFIX:-Represent this sentence for searching relevant passages: }
+      - "EMBEDDING_QUERY_PREFIX=${EMBEDDING_QUERY_PREFIX:-Represent this sentence for searching relevant passages: }"
       - RERANKER_MODEL=${RERANKER_MODEL:-cross-encoder/ms-marco-MiniLM-L-6-v2}
       - RERANK_TRUNCATE=${RERANK_TRUNCATE:-512}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
@@ -113,7 +113,7 @@ services:
     container_name: qdrant-backup
     entrypoint: >
       sh -c "curl -s -X POST http://qdrant:6333/collections/$${COLLECTION_NAME}/snapshots &&
-             echo 'Backup completato: '$(date)"
+             echo 'Backup completato: '$$(date)"
     environment:
       - COLLECTION_NAME=${COLLECTION_NAME:-codebase}
     depends_on:
