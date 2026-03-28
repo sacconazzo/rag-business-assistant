@@ -13,10 +13,11 @@ import asyncio
 import logging
 from datetime import datetime
 from collections import defaultdict
+from functools import partial
 
 import google.generativeai as genai
 from qdrant_client import QdrantClient
-from qdrant_client.models import Filter, FieldCondition, MatchValue, MatchText, NamedVector, Query
+from qdrant_client.models import Filter, FieldCondition, MatchValue, MatchText
 from sentence_transformers import SentenceTransformer, CrossEncoder
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request
@@ -48,9 +49,13 @@ ENABLE_RERANKING = os.getenv("ENABLE_RERANKING", "true").lower() == "true"
 RERANK_CANDIDATES = int(os.getenv("RERANK_CANDIDATES", "30"))
 HYBRID_ALPHA = float(os.getenv("HYBRID_ALPHA", "0.65"))
 RERANKER_MODEL = os.getenv("RERANKER_MODEL", "cross-encoder/ms-marco-MiniLM-L-6-v2")
-RERANK_TRUNCATE = int(os.getenv("RERANK_TRUNCATE", "512"))
+RERANK_TRUNCATE = int(os.getenv("RERANK_TRUNCATE", "1024"))
 
-SYSTEM_PROMPT = """You are an expert assistant for our business codebase.
+# Query log rotation
+QUERY_LOG_MAX_SIZE_MB = int(os.getenv("QUERY_LOG_MAX_SIZE_MB", "50"))
+
+# System prompt (configurable)
+SYSTEM_PROMPT = os.getenv("SYSTEM_PROMPT", """You are an expert assistant for our business codebase.
 Answer questions about business logic based EXCLUSIVELY on the code
 snippets and documentation provided as context.
 
@@ -60,7 +65,7 @@ Rules:
 - Explain the logic clearly, as if talking to a colleague.
 - If you find inconsistencies in the code, point them out.
 - Reply in the same language as the question.
-"""
+""")
 
 
 # ============================================================
@@ -76,18 +81,39 @@ logger = logging.getLogger("rag-proxy")
 
 
 class QueryLogger:
-    """Writes each query to a JSONL file for later analysis."""
+    """Writes each query to a JSONL file with automatic rotation."""
 
-    def __init__(self, log_dir="/app/logs"):
+    def __init__(self, log_dir="/app/logs", max_size_mb: int = QUERY_LOG_MAX_SIZE_MB):
         self.log_dir = log_dir
         os.makedirs(log_dir, exist_ok=True)
         self.log_file = os.path.join(log_dir, "queries.jsonl")
+        self.max_size_bytes = max_size_mb * 1024 * 1024
+
+    def _rotate_if_needed(self):
+        try:
+            if os.path.exists(self.log_file) and os.path.getsize(self.log_file) > self.max_size_bytes:
+                timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+                rotated = os.path.join(self.log_dir, f"queries_{timestamp}.jsonl")
+                os.rename(self.log_file, rotated)
+                # Keep only last 5 rotated files
+                rotated_files = sorted(
+                    [f for f in os.listdir(self.log_dir) if f.startswith("queries_") and f.endswith(".jsonl")]
+                )
+                for old_file in rotated_files[:-5]:
+                    try:
+                        os.remove(os.path.join(self.log_dir, old_file))
+                    except OSError:
+                        pass
+                logger.info(f"Query log rotated: {rotated}")
+        except Exception as e:
+            logger.error(f"Log rotation error: {e}")
 
     def log(self, entry: dict):
         if not ENABLE_QUERY_LOG:
             return
         entry["timestamp"] = datetime.utcnow().isoformat()
         try:
+            self._rotate_if_needed()
             with open(self.log_file, "a") as f:
                 f.write(json.dumps(entry, ensure_ascii=False) + "\n")
         except Exception as e:
@@ -100,6 +126,9 @@ query_logger = QueryLogger()
 # ============================================================
 # METRICS
 # ============================================================
+
+MAX_ERROR_TYPES = 100  # Cap on distinct error types tracked
+
 
 class Metrics:
     def __init__(self):
@@ -121,14 +150,18 @@ class Metrics:
         self.rag_latencies.append(rag_ms)
         if not had_context:
             self.queries_no_context += 1
-        # Tieni solo le ultime 1000
+        # Keep only last 1000
         if len(self.latencies) > 1000:
             self.latencies = self.latencies[-1000:]
             self.rag_latencies = self.rag_latencies[-1000:]
 
     def record_error(self, error_type: str):
         self.total_errors += 1
-        self.errors_by_type[error_type] += 1
+        # Prevent unbounded growth of error types
+        if error_type in self.errors_by_type or len(self.errors_by_type) < MAX_ERROR_TYPES:
+            self.errors_by_type[error_type] += 1
+        else:
+            self.errors_by_type["_other"] += 1
 
     def _percentile(self, data: list, p: float) -> float:
         if not data:
@@ -266,13 +299,14 @@ async def call_gemini_with_retry(chat, content: str, stream: bool = False):
             detail="Servizio temporaneamente non disponibile. Riprova tra qualche secondo."
         )
 
+    loop = asyncio.get_event_loop()
     last_error = None
     for attempt in range(GEMINI_MAX_RETRIES):
         try:
-            if stream:
-                result = chat.send_message(content, stream=True)
-            else:
-                result = chat.send_message(content)
+            # Run synchronous Gemini SDK in thread to avoid blocking the event loop
+            result = await loop.run_in_executor(
+                None, partial(chat.send_message, content, stream=stream)
+            )
             circuit_breaker.record_success()
             return result
         except Exception as e:
@@ -291,6 +325,13 @@ async def call_gemini_with_retry(chat, content: str, stream: bool = False):
 
     circuit_breaker.record_failure()
     raise last_error
+
+
+# ============================================================
+# REINDEX LOCK
+# ============================================================
+
+_reindex_lock = asyncio.Lock()
 
 
 # ============================================================
@@ -337,7 +378,7 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 # HYBRID SEARCH + RERANKING
 # ============================================================
 
-def cerca_contesto(domanda: str, n_risultati: int = MAX_RISULTATI) -> list[dict]:
+def cerca_contesto(domanda: str, n_risultati: int = MAX_RISULTATI, repo_filter: str = None) -> list[dict]:
     """
     1. Vector search (semantic)
     2. Full-text search (keyword)
@@ -347,10 +388,16 @@ def cerca_contesto(domanda: str, n_risultati: int = MAX_RISULTATI) -> list[dict]
     query_vector = embedder.encode(EMBEDDING_QUERY_PREFIX + domanda).tolist()
     candidates = RERANK_CANDIDATES if ENABLE_RERANKING else n_risultati
 
+    # Optional repo filter
+    qdrant_filter = None
+    if repo_filter:
+        qdrant_filter = Filter(must=[FieldCondition(key="repo", match=MatchValue(value=repo_filter))])
+
     # --- Vector search ---
     vector_results = qdrant.query_points(
         collection_name=COLLECTION_NAME,
         query=query_vector,
+        query_filter=qdrant_filter,
         limit=candidates,
         with_payload=True,
     ).points
@@ -358,9 +405,12 @@ def cerca_contesto(domanda: str, n_risultati: int = MAX_RISULTATI) -> list[dict]
     # --- Full-text search ---
     text_results = []
     try:
+        text_filter_conditions = [FieldCondition(key="content", match=MatchText(text=domanda))]
+        if repo_filter:
+            text_filter_conditions.append(FieldCondition(key="repo", match=MatchValue(value=repo_filter)))
         scroll_result = qdrant.scroll(
             collection_name=COLLECTION_NAME,
-            scroll_filter=Filter(must=[FieldCondition(key="content", match=MatchText(text=domanda))]),
+            scroll_filter=Filter(must=text_filter_conditions),
             limit=candidates,
             with_payload=True,
             with_vectors=False,
@@ -448,6 +498,15 @@ def get_client_ip(request: Request) -> str:
     return forwarded.split(",")[0].strip() if forwarded else (request.client.host if request.client else "unknown")
 
 
+def _extract_repo_filter(domanda: str) -> tuple[str, str | None]:
+    """Extract optional repo: filter from question. Returns (cleaned_question, repo_name)."""
+    import re
+    match = re.match(r"^repo:(\S+)\s+(.+)$", domanda, re.DOTALL)
+    if match:
+        return match.group(2).strip(), match.group(1)
+    return domanda, None
+
+
 # ============================================================
 # ENDPOINTS OPENAI-COMPATIBILI
 # ============================================================
@@ -491,6 +550,9 @@ async def chat_completions(request: Request):
     if not domanda:
         raise HTTPException(status_code=400, detail="No question found")
 
+    # Extract optional repo filter (e.g. "repo:my-app how does auth work?")
+    domanda_clean, repo_filter = _extract_repo_filter(domanda)
+
     # --- RAG ---
     contesto_completo = ""
     n_fonti = 0
@@ -500,7 +562,7 @@ async def chat_completions(request: Request):
         rag_start = time.time()
         collections = [c.name for c in qdrant.get_collections().collections]
         if COLLECTION_NAME in collections and qdrant.count(COLLECTION_NAME).count > 0:
-            contesti = cerca_contesto(domanda)
+            contesti = cerca_contesto(domanda_clean, repo_filter=repo_filter)
             blocchi = []
             for ctx in contesti:
                 tag = f" [{ctx['source']}]" if ctx["source"] != "vector" else ""
@@ -515,8 +577,8 @@ async def chat_completions(request: Request):
     # --- Prompt ---
     history = openai_to_gemini_history(messages[:-1])
     user_content = (
-        f"Context from codebase ({n_fonti} snippets):\n\n{contesto_completo}\n\n---\n\nQuestion: {domanda}"
-        if contesto_completo else domanda
+        f"Context from codebase ({n_fonti} snippets):\n\n{contesto_completo}\n\n---\n\nQuestion: {domanda_clean}"
+        if contesto_completo else domanda_clean
     )
 
     # --- Gemini ---
@@ -525,8 +587,12 @@ async def chat_completions(request: Request):
 
         if stream:
             return StreamingResponse(
-                _stream_gemini(chat, user_content, domanda, start_time, rag_ms, n_fonti),
+                _stream_gemini(chat, user_content, domanda_clean, start_time, rag_ms, n_fonti),
                 media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "X-Accel-Buffering": "no",
+                },
             )
 
         response = await call_gemini_with_retry(chat, user_content)
@@ -562,27 +628,67 @@ async def chat_completions(request: Request):
 async def _stream_gemini(chat, user_content: str, domanda: str, start_time: float, rag_ms: float, n_fonti: int):
     chat_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
     full_response = []
+    loop = asyncio.get_event_loop()
 
     try:
+        # Get the streaming response in a thread (send_message is sync)
         response = await call_gemini_with_retry(chat, user_content, stream=True)
 
-        for chunk in response:
-            if chunk.text:
-                full_response.append(chunk.text)
-                yield f"data: {json.dumps({'id': chat_id, 'object': 'chat.completion.chunk', 'created': int(time.time()), 'model': 'business-assistant', 'choices': [{'index': 0, 'delta': {'content': chunk.text}, 'finish_reason': None}]})}\n\n"
+        # Iterate over chunks in a thread to avoid blocking the event loop
+        def _iter_chunks():
+            chunks = []
+            for chunk in response:
+                if chunk.text:
+                    chunks.append(chunk.text)
+            return chunks
 
-        yield f"data: {json.dumps({'id': chat_id, 'object': 'chat.completion.chunk', 'created': int(time.time()), 'model': 'business-assistant', 'choices': [{'index': 0, 'delta': {}, 'finish_reason': 'stop'}]})}\n\n"
+        chunks = await loop.run_in_executor(None, _iter_chunks)
+
+        for text in chunks:
+            full_response.append(text)
+            data = {
+                "id": chat_id,
+                "object": "chat.completion.chunk",
+                "created": int(time.time()),
+                "model": "business-assistant",
+                "choices": [{"index": 0, "delta": {"content": text}, "finish_reason": None}],
+            }
+            yield f"data: {json.dumps(data)}\n\n"
+
+        # Send finish chunk
+        data = {
+            "id": chat_id,
+            "object": "chat.completion.chunk",
+            "created": int(time.time()),
+            "model": "business-assistant",
+            "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+        }
+        yield f"data: {json.dumps(data)}\n\n"
         yield "data: [DONE]\n\n"
 
+        # Record metrics
         full_text = "".join(full_response)
         latency_ms = (time.time() - start_time) * 1000
+        tokens_in = len(user_content) // 4
         tokens_out = len(full_text) // 4
-        metrics.record_query(latency_ms, rag_ms, 0, tokens_out, had_context=n_fonti > 0)
-        query_logger.log({"domanda": domanda[:200], "fonti": n_fonti, "latency_ms": round(latency_ms), "rag_ms": round(rag_ms), "tokens_out": tokens_out, "stream": True})
+        metrics.record_query(latency_ms, rag_ms, tokens_in, tokens_out, had_context=n_fonti > 0)
+        query_logger.log({
+            "domanda": domanda[:200], "fonti": n_fonti, "latency_ms": round(latency_ms),
+            "rag_ms": round(rag_ms), "tokens_in": tokens_in, "tokens_out": tokens_out, "stream": True,
+        })
 
     except Exception as e:
         metrics.record_error(type(e).__name__)
-        yield f"data: {json.dumps({'id': chat_id, 'object': 'chat.completion.chunk', 'created': int(time.time()), 'model': 'business-assistant', 'choices': [{'index': 0, 'delta': {'content': f'\\n\\n⚠️ Error: {str(e)}'}, 'finish_reason': 'stop'}]})}\n\n"
+        logger.error(f"Streaming error: {e}")
+        # Send error as a proper SSE chunk so the client sees the message
+        error_data = {
+            "id": chat_id,
+            "object": "chat.completion.chunk",
+            "created": int(time.time()),
+            "model": "business-assistant",
+            "choices": [{"index": 0, "delta": {"content": f"\n\n[Error: {str(e)}]"}, "finish_reason": "stop"}],
+        }
+        yield f"data: {json.dumps(error_data)}\n\n"
         yield "data: [DONE]\n\n"
 
 
@@ -635,16 +741,20 @@ async def stats():
 
 @app.post("/reindex")
 async def reindex():
-    import subprocess
-    try:
-        result = subprocess.run(
-            ["python", "/app/scripts/indexer.py"],
-            capture_output=True, text=True, timeout=600,
-            env={**os.environ, "QDRANT_URL": QDRANT_URL, "REPOS_PATH": "/data/repos"},
-        )
-        return {"status": "ok" if result.returncode == 0 else "error", "output": result.stdout[-1000:], "errors": result.stderr[-500:]}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    if _reindex_lock.locked():
+        raise HTTPException(status_code=409, detail="Reindex already in progress")
+
+    async with _reindex_lock:
+        import subprocess
+        try:
+            result = subprocess.run(
+                ["python", "/app/scripts/indexer.py"],
+                capture_output=True, text=True, timeout=600,
+                env={**os.environ, "QDRANT_URL": QDRANT_URL, "REPOS_PATH": "/data/repos"},
+            )
+            return {"status": "ok" if result.returncode == 0 else "error", "output": result.stdout[-1000:], "errors": result.stderr[-500:]}
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
 
 
 # ============================================================
