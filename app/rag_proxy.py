@@ -722,6 +722,9 @@ async def _stream_gemini(chat, user_content: str, domanda: str, start_time: floa
 
         chunks = await loop.run_in_executor(None, _iter_chunks)
 
+        # Send initial role chunk (required by OpenAI spec)
+        yield f"data: {json.dumps({'id': chat_id, 'object': 'chat.completion.chunk', 'created': int(time.time()), 'model': 'business-assistant', 'choices': [{'index': 0, 'delta': {'role': 'assistant', 'content': ''}, 'finish_reason': None}]})}\n\n"
+
         for text in chunks:
             full_response.append(text)
             data = {
