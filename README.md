@@ -53,12 +53,12 @@ cp .env.example .env
 Edit `.env`:
 ```env
 GEMINI_API_KEY=AIzaSy-your-key
-REPOS_HOST_PATH=/home/mario/projects   # your folder, as-is
+REPOS_HOST_PATH=/workspace/projects/my-app   # your folder, as-is
 ```
 
 The folder must contain subfolders (each subfolder = one repo):
 ```
-/home/mario/projects/
+/workspace/projects/my-app/
 ├── repo-api/
 ├── repo-frontend/
 ├── repo-services/
