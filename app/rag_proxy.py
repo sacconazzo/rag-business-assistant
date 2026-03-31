@@ -813,20 +813,31 @@ async def _stream_gemini(chat, user_content: str, domanda: str, start_time: floa
         # Get the streaming response in a thread (send_message is sync)
         response = await call_gemini_with_retry(chat, user_content, stream=True)
 
-        # Iterate over chunks in a thread to avoid blocking the event loop
-        def _iter_chunks():
-            chunks = []
-            for chunk in response:
-                if chunk.text:
-                    chunks.append(chunk.text)
-            return chunks
+        # Use a queue to forward chunks from the sync thread to the async generator in real time
+        queue: asyncio.Queue = asyncio.Queue()
 
-        chunks = await loop.run_in_executor(None, _iter_chunks)
+        def _producer():
+            try:
+                for chunk in response:
+                    if chunk.text:
+                        asyncio.run_coroutine_threadsafe(queue.put(chunk.text), loop)
+            except Exception as exc:
+                asyncio.run_coroutine_threadsafe(queue.put(exc), loop)
+            finally:
+                asyncio.run_coroutine_threadsafe(queue.put(None), loop)  # sentinel
+
+        loop.run_in_executor(None, _producer)
 
         # Send initial role chunk (required by OpenAI spec)
         yield f"data: {json.dumps({'id': chat_id, 'object': 'chat.completion.chunk', 'created': int(time.time()), 'model': 'business-assistant', 'choices': [{'index': 0, 'delta': {'role': 'assistant', 'content': ''}, 'finish_reason': None}]})}\n\n"
 
-        for text in chunks:
+        while True:
+            item = await queue.get()
+            if item is None:
+                break
+            if isinstance(item, Exception):
+                raise item
+            text = item
             full_response.append(text)
             data = {
                 "id": chat_id,
