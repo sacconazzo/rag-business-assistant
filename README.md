@@ -161,39 +161,6 @@ curl http://localhost:8001/metrics
 curl http://localhost:8001/stats
 ```
 
-### What you find in /metrics
-
-```json
-{
-  "total_queries": 1542,
-  "total_errors": 3,
-  "error_rate_pct": 0.2,
-  "queries_no_context": 12,
-  "latency": {
-    "avg_ms": 1850,
-    "p50_ms": 1620,
-    "p95_ms": 3200,
-    "p99_ms": 5100
-  },
-  "rag_latency": {
-    "avg_ms": 145,
-    "p95_ms": 320
-  },
-  "tokens": {
-    "total_input": 2450000,
-    "total_output": 890000
-  },
-  "cost_usd": {
-    "input": 0.1838,
-    "output": 0.267,
-    "total": 0.4508
-  },
-  "errors_by_type": {
-    "rate_limit": 2,
-    "retry_APIError": 1
-  }
-}
-```
 
 ### Query log
 
@@ -244,44 +211,32 @@ curl -X POST http://localhost:8001/reindex
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `GEMINI_API_KEY` | (required) | Gemini API key |
-| `REPOS_HOST_PATH` | (required) | Path to repositories folder |
+| `GEMINI_API_KEY` | **(required)** | Gemini API key |
+| `REPOS_HOST_PATH` | **(required)** | Absolute path to repositories folder |
 | `GEMINI_MODEL` | `gemini-2.5-flash` | Gemini model |
+| `SYSTEM_PROMPT` | `` | Custom system prompt (empty = default) |
 | `MAX_RISULTATI` | `8` | Chunks in context |
+| `HYBRID_ALPHA` | `0.65` | Vector vs full-text weight (0=text, 1=vector) |
+| `ENABLE_RERANKING` | `true` | Cross-encoder reranking |
+| `RERANK_CANDIDATES` | `30` | Candidates evaluated before reranking |
+| `RERANKER_MODEL` | `cross-encoder/ms-marco-MiniLM-L-6-v2` | Cross-encoder model |
+| `RERANK_TRUNCATE` | `1024` | Max chars passed to reranker |
+| `EMBEDDING_MODEL` | `BAAI/bge-base-en-v1.5` | Sentence-transformer model |
+| `EMBEDDING_QUERY_PREFIX` | `Represent this sentence...` | Query prefix for instruction-following models |
 | `CHUNK_MAX_CHARS` | `1500` | Maximum chunk size (chars) |
 | `CHUNK_OVERLAP_CHARS` | `200` | Overlap between consecutive chunks (chars) |
-| `ENABLE_RERANKING` | `true` | Cross-encoder reranking |
-| `RERANK_CANDIDATES` | `30` | Pre-reranking candidates |
-| `RERANKER_MODEL` | `cross-encoder/ms-marco-MiniLM-L-6-v2` | Cross-encoder model |
-| `RERANK_TRUNCATE` | `512` | Max chars passed to reranker |
-| `HYBRID_ALPHA` | `0.65` | Vector vs full-text weight |
-| `EMBEDDING_MODEL` | `BAAI/bge-base-en-v1.5` | Sentence-transformer model |
-| `EMBEDDING_QUERY_PREFIX` | `Represent this sentence...` | Query prefix for instruction-following models (see Embedding Models section) |
 | `BATCH_SIZE` | `64` | Indexing batch size |
 | `HNSW_M` | `16` | HNSW connections per node |
 | `HNSW_EF` | `128` | HNSW construction candidates |
 | `ENABLE_QUANTIZATION` | `true` | Scalar INT8 quantization |
+| `FORCE_REINDEX` | `false` | Drop and recreate collection on next index run |
+| `COLLECTION_NAME` | `codebase` | Qdrant collection name |
 | `GEMINI_MAX_RETRIES` | `3` | Retries on error |
 | `GEMINI_RETRY_DELAY` | `1.0` | Base retry delay (sec) |
 | `RATE_LIMIT_PER_MINUTE` | `30` | Max requests/min per IP |
 | `LOG_LEVEL` | `INFO` | Log level |
 | `ENABLE_QUERY_LOG` | `true` | Log queries to file |
-
----
-
-## 📁 Structure
-
-```
-rag-business-assistant/
-├── docker-compose.yml
-├── Dockerfile.proxy
-├── Dockerfile.indexer
-├── .env.example
-├── .gitignore
-├── README.md
-├── app/
-│   └── rag_proxy.py        # RAG + Gemini + resilience + metrics
-└── scripts/
-    ├── indexer.py            # Indexing → Qdrant
-    └── reindex.sh            # Automatic update
-```
+| `QUERY_LOG_MAX_SIZE_MB` | `50` | Max query log file size before rotation |
+| `QDRANT_PORT` | `6333` | Qdrant exposed port |
+| `WEBUI_PORT` | `3000` | Open WebUI exposed port |
+| `RAG_PROXY_PORT` | `8001` | RAG Proxy exposed port |
