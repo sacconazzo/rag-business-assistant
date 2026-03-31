@@ -1,6 +1,6 @@
 # 🤖 RAG Business Assistant
 
-AI assistant for querying the business logic of your repositories.
+AI assistant for querying the business logic of your codebase or your data exports.
 **Qdrant** + **Google Gemini** + **Open WebUI**.
 
 ---

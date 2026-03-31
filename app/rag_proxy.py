@@ -16,6 +16,7 @@ from collections import defaultdict
 from functools import partial
 
 import google.generativeai as genai
+import openai as _openai
 from qdrant_client import QdrantClient
 from qdrant_client.models import Filter, FieldCondition, MatchValue, MatchText
 from sentence_transformers import SentenceTransformer, CrossEncoder
@@ -29,8 +30,12 @@ from fastapi.responses import StreamingResponse
 # CONFIG
 # ============================================================
 
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "gemini")  # "gemini" or "openai"
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o")
 QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
 COLLECTION_NAME = os.getenv("COLLECTION_NAME", "codebase")
 MAX_RISULTATI = int(os.getenv("MAX_RISULTATI", "8"))
@@ -329,6 +334,54 @@ async def call_gemini_with_retry(chat, content: str, stream: bool = False):
 
 
 # ============================================================
+# OPENAI RETRY CON BACKOFF
+# ============================================================
+
+async def call_openai_with_retry(messages: list, stream: bool = False):
+    if not circuit_breaker.can_execute():
+        raise HTTPException(
+            status_code=503,
+            detail="Servizio temporaneamente non disponibile. Riprova tra qualche secondo."
+        )
+
+    last_error = None
+    for attempt in range(GEMINI_MAX_RETRIES):
+        try:
+            result = await openai_client.chat.completions.create(
+                model=OPENAI_MODEL,
+                messages=messages,
+                stream=stream,
+            )
+            circuit_breaker.record_success()
+            return result
+        except Exception as e:
+            last_error = e
+            error_str = str(e).lower()
+            if any(kw in error_str for kw in ["invalid", "permission", "api_key", "not found", "401", "403"]):
+                circuit_breaker.record_failure()
+                raise
+            delay = GEMINI_RETRY_DELAY * (2 ** attempt)
+            logger.warning(f"OpenAI tentativo {attempt + 1}/{GEMINI_MAX_RETRIES}: {e}. Retry in {delay:.1f}s")
+            metrics.record_error(f"retry_{type(e).__name__}")
+            await asyncio.sleep(delay)
+
+    circuit_breaker.record_failure()
+    raise last_error
+
+
+def build_openai_messages(messages: list, user_content: str) -> list:
+    """Build OpenAI messages array with system prompt and RAG-augmented last user message."""
+    result = [{"role": "system", "content": SYSTEM_PROMPT}]
+    for msg in messages[:-1]:
+        role = msg.get("role", "user")
+        if role == "system":
+            continue
+        result.append({"role": role, "content": msg.get("content", "")})
+    result.append({"role": "user", "content": user_content})
+    return result
+
+
+# ============================================================
 # REINDEX LOCK
 # ============================================================
 
@@ -343,6 +396,7 @@ qdrant: QdrantClient = None
 embedder: SentenceTransformer = None
 reranker: CrossEncoder = None
 gemini_model = None
+openai_client: _openai.AsyncOpenAI = None
 known_repos: set[str] = set()
 
 
@@ -377,7 +431,7 @@ def _load_known_repos():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global qdrant, embedder, reranker, gemini_model
+    global qdrant, embedder, reranker, gemini_model, openai_client
 
     qdrant = QdrantClient(url=QDRANT_URL, timeout=30)
     collections = [c.name for c in qdrant.get_collections().collections]
@@ -391,11 +445,17 @@ async def lifespan(app: FastAPI):
         reranker = CrossEncoder(RERANKER_MODEL)
         logger.info(f"Reranker: {RERANKER_MODEL}")
 
-    if not GEMINI_API_KEY:
-        raise ValueError("GEMINI_API_KEY is required")
-    genai.configure(api_key=GEMINI_API_KEY)
-    gemini_model = genai.GenerativeModel(model_name=GEMINI_MODEL, system_instruction=SYSTEM_PROMPT)
-    logger.info(f"Gemini: {GEMINI_MODEL}")
+    if LLM_PROVIDER == "openai":
+        if not OPENAI_API_KEY:
+            raise ValueError("OPENAI_API_KEY is required when LLM_PROVIDER=openai")
+        openai_client = _openai.AsyncOpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL)
+        logger.info(f"OpenAI-compatible: {OPENAI_BASE_URL} model={OPENAI_MODEL}")
+    else:
+        if not GEMINI_API_KEY:
+            raise ValueError("GEMINI_API_KEY is required when LLM_PROVIDER=gemini")
+        genai.configure(api_key=GEMINI_API_KEY)
+        gemini_model = genai.GenerativeModel(model_name=GEMINI_MODEL, system_instruction=SYSTEM_PROMPT)
+        logger.info(f"Gemini: {GEMINI_MODEL}")
 
     _load_known_repos()
 
@@ -598,7 +658,7 @@ async def list_models():
             "object": "model",
             "created": int(time.time()),
             "owned_by": "rag-proxy",
-            "name": "Business Logic Assistant",
+            "name": "Business Assistant",
         }],
     }
 
@@ -653,54 +713,95 @@ async def chat_completions(request: Request):
         metrics.record_error("rag_error")
 
     # --- Prompt ---
-    history = openai_to_gemini_history(messages[:-1])
     user_content = (
         f"Context from codebase ({n_fonti} snippets):\n\n{contesto_completo}\n\n---\n\nQuestion: {domanda_clean}"
         if contesto_completo else domanda_clean
     )
 
-    # --- Gemini ---
-    try:
-        chat = gemini_model.start_chat(history=history)
+    if LLM_PROVIDER == "openai":
+        # --- OpenAI / Copilot ---
+        openai_messages = build_openai_messages(messages, user_content)
+        try:
+            if stream:
+                return StreamingResponse(
+                    _stream_openai(openai_messages, domanda_clean, start_time, rag_ms, n_fonti),
+                    media_type="text/event-stream",
+                    headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+                )
 
-        if stream:
-            return StreamingResponse(
-                _stream_gemini(chat, user_content, domanda_clean, start_time, rag_ms, n_fonti),
-                media_type="text/event-stream",
-                headers={
-                    "Cache-Control": "no-cache",
-                    "X-Accel-Buffering": "no",
-                },
-            )
+            response = await call_openai_with_retry(openai_messages)
+            response_text = response.choices[0].message.content or ""
 
-        response = await call_gemini_with_retry(chat, user_content)
-        response_text = response.text
+            latency_ms = (time.time() - start_time) * 1000
+            tokens_in = response.usage.prompt_tokens if response.usage else len(user_content) // 4
+            tokens_out = response.usage.completion_tokens if response.usage else len(response_text) // 4
 
-        latency_ms = (time.time() - start_time) * 1000
-        tokens_in = sum(len(m.get("content", "")) // 4 for m in messages) + len(contesto_completo) // 4
-        tokens_out = len(response_text) // 4
+            metrics.record_query(latency_ms, rag_ms, tokens_in, tokens_out, had_context=n_fonti > 0)
+            query_logger.log({
+                "domanda": domanda[:200], "fonti": n_fonti, "latency_ms": round(latency_ms),
+                "rag_ms": round(rag_ms), "tokens_in": tokens_in, "tokens_out": tokens_out,
+            })
 
-        metrics.record_query(latency_ms, rag_ms, tokens_in, tokens_out, had_context=n_fonti > 0)
-        query_logger.log({
-            "domanda": domanda[:200], "fonti": n_fonti, "latency_ms": round(latency_ms),
-            "rag_ms": round(rag_ms), "tokens_in": tokens_in, "tokens_out": tokens_out,
-        })
+            return {
+                "id": f"chatcmpl-{uuid.uuid4().hex[:8]}",
+                "object": "chat.completion",
+                "created": int(time.time()),
+                "model": "business-assistant",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": response_text}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": tokens_in, "completion_tokens": tokens_out, "total_tokens": tokens_in + tokens_out},
+            }
 
-        return {
-            "id": f"chatcmpl-{uuid.uuid4().hex[:8]}",
-            "object": "chat.completion",
-            "created": int(time.time()),
-            "model": "business-assistant",
-            "choices": [{"index": 0, "message": {"role": "assistant", "content": response_text}, "finish_reason": "stop"}],
-            "usage": {"prompt_tokens": tokens_in, "completion_tokens": tokens_out, "total_tokens": tokens_in + tokens_out},
-        }
+        except HTTPException:
+            raise
+        except Exception as e:
+            metrics.record_error(type(e).__name__)
+            logger.error(f"OpenAI error: {e}")
+            raise HTTPException(status_code=502, detail=f"OpenAI error: {str(e)}")
 
-    except HTTPException:
-        raise
-    except Exception as e:
-        metrics.record_error(type(e).__name__)
-        logger.error(f"Gemini error: {e}")
-        raise HTTPException(status_code=502, detail=f"Gemini error: {str(e)}")
+    else:
+        # --- Gemini ---
+        history = openai_to_gemini_history(messages[:-1])
+        try:
+            chat = gemini_model.start_chat(history=history)
+
+            if stream:
+                return StreamingResponse(
+                    _stream_gemini(chat, user_content, domanda_clean, start_time, rag_ms, n_fonti),
+                    media_type="text/event-stream",
+                    headers={
+                        "Cache-Control": "no-cache",
+                        "X-Accel-Buffering": "no",
+                    },
+                )
+
+            response = await call_gemini_with_retry(chat, user_content)
+            response_text = response.text
+
+            latency_ms = (time.time() - start_time) * 1000
+            tokens_in = sum(len(m.get("content", "")) // 4 for m in messages) + len(contesto_completo) // 4
+            tokens_out = len(response_text) // 4
+
+            metrics.record_query(latency_ms, rag_ms, tokens_in, tokens_out, had_context=n_fonti > 0)
+            query_logger.log({
+                "domanda": domanda[:200], "fonti": n_fonti, "latency_ms": round(latency_ms),
+                "rag_ms": round(rag_ms), "tokens_in": tokens_in, "tokens_out": tokens_out,
+            })
+
+            return {
+                "id": f"chatcmpl-{uuid.uuid4().hex[:8]}",
+                "object": "chat.completion",
+                "created": int(time.time()),
+                "model": "business-assistant",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": response_text}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": tokens_in, "completion_tokens": tokens_out, "total_tokens": tokens_in + tokens_out},
+            }
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            metrics.record_error(type(e).__name__)
+            logger.error(f"Gemini error: {e}")
+            raise HTTPException(status_code=502, detail=f"Gemini error: {str(e)}")
 
 
 async def _stream_gemini(chat, user_content: str, domanda: str, start_time: float, rag_ms: float, n_fonti: int):
@@ -773,6 +874,63 @@ async def _stream_gemini(chat, user_content: str, domanda: str, start_time: floa
         yield "data: [DONE]\n\n"
 
 
+async def _stream_openai(messages: list, domanda: str, start_time: float, rag_ms: float, n_fonti: int):
+    chat_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
+    full_response = []
+
+    try:
+        response = await call_openai_with_retry(messages, stream=True)
+
+        yield f"data: {json.dumps({'id': chat_id, 'object': 'chat.completion.chunk', 'created': int(time.time()), 'model': 'business-assistant', 'choices': [{'index': 0, 'delta': {'role': 'assistant', 'content': ''}, 'finish_reason': None}]})}\n\n"
+
+        async for chunk in response:
+            delta = chunk.choices[0].delta if chunk.choices else None
+            if delta and delta.content:
+                text = delta.content
+                full_response.append(text)
+                data = {
+                    "id": chat_id,
+                    "object": "chat.completion.chunk",
+                    "created": int(time.time()),
+                    "model": "business-assistant",
+                    "choices": [{"index": 0, "delta": {"content": text}, "finish_reason": None}],
+                }
+                yield f"data: {json.dumps(data)}\n\n"
+
+        data = {
+            "id": chat_id,
+            "object": "chat.completion.chunk",
+            "created": int(time.time()),
+            "model": "business-assistant",
+            "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+        }
+        yield f"data: {json.dumps(data)}\n\n"
+        yield "data: [DONE]\n\n"
+
+        full_text = "".join(full_response)
+        latency_ms = (time.time() - start_time) * 1000
+        tokens_in = len(messages[-1]["content"]) // 4 if messages else 0
+        tokens_out = len(full_text) // 4
+        metrics.record_query(latency_ms, rag_ms, tokens_in, tokens_out, had_context=n_fonti > 0)
+        query_logger.log({
+            "domanda": domanda[:200], "fonti": n_fonti, "latency_ms": round(latency_ms),
+            "rag_ms": round(rag_ms), "tokens_in": tokens_in, "tokens_out": tokens_out, "stream": True,
+        })
+
+    except Exception as e:
+        metrics.record_error(type(e).__name__)
+        logger.error(f"OpenAI streaming error: {e}")
+        error_data = {
+            "id": chat_id,
+            "object": "chat.completion.chunk",
+            "created": int(time.time()),
+            "model": "business-assistant",
+            "choices": [{"index": 0, "delta": {"content": f"\n\n[Error: {str(e)}]"}, "finish_reason": "stop"}],
+        }
+        yield f"data: {json.dumps(error_data)}\n\n"
+        yield "data: [DONE]\n\n"
+
+
 # ============================================================
 # OPERATIONAL ENDPOINTS
 # ============================================================
@@ -789,10 +947,15 @@ async def health():
     except Exception:
         pass
 
+    llm_info = (
+        {"provider": "openai", "base_url": OPENAI_BASE_URL, "model": OPENAI_MODEL, "circuit_breaker": circuit_breaker.state}
+        if LLM_PROVIDER == "openai"
+        else {"provider": "gemini", "model": GEMINI_MODEL, "circuit_breaker": circuit_breaker.state}
+    )
     return {
         "status": "ok" if qdrant_ok else "degraded",
         "qdrant": {"status": "ok" if qdrant_ok else "error", "vectors": count},
-        "gemini": {"model": GEMINI_MODEL, "circuit_breaker": circuit_breaker.state},
+        "llm": llm_info,
         "rag": {"reranking": ENABLE_RERANKING, "hybrid_alpha": HYBRID_ALPHA, "reranker_model": RERANKER_MODEL if ENABLE_RERANKING else None},
     }
 
