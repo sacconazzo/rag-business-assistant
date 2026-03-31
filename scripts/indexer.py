@@ -10,6 +10,9 @@ import glob
 import time
 import hashlib
 
+import openpyxl
+import xlrd
+
 from qdrant_client import QdrantClient
 from qdrant_client.models import (
     Distance, VectorParams, PointStruct,
@@ -39,6 +42,7 @@ FILE_EXTENSIONS = [
     "*.sql",
     "*.md", "*.txt", "*.rst",
     "*.yaml", "*.yml", "*.toml", "*.json",
+    "*.xlsx", "*.xls",
 ]
 
 SKIP_DIRS = {
@@ -113,6 +117,63 @@ def chunk_codice(testo: str, filepath: str, max_chars: int = CHUNK_MAX_CHARS,
     return [c for c in chunks if len(c.strip()) > 50]
 
 
+def read_xls(filepath: str) -> str:
+    """Extract text from a legacy .xls file using xlrd."""
+    wb = xlrd.open_workbook(filepath)
+    parts = []
+    for sheet_name in wb.sheet_names():
+        ws = wb.sheet_by_name(sheet_name)
+        rows = []
+        for row_idx in range(ws.nrows):
+            row = ws.row_values(row_idx)
+            if all(v == "" or v is None for v in row):
+                continue
+            rows.append("\t".join("" if v is None else str(v) for v in row))
+        if rows:
+            parts.append(f"## Sheet: {sheet_name}\n" + "\n".join(rows))
+    return "\n\n".join(parts)
+
+
+def read_xlsx(filepath: str) -> str:
+    """Extract text from an xlsx file. Each sheet is rendered as a markdown-like table."""
+    wb = openpyxl.load_workbook(filepath, read_only=True, data_only=True)
+    parts = []
+    for sheet_name in wb.sheetnames:
+        ws = wb[sheet_name]
+        rows = []
+        for row in ws.iter_rows(values_only=True):
+            if all(cell is None for cell in row):
+                continue
+            rows.append("\t".join("" if v is None else str(v) for v in row))
+        if rows:
+            parts.append(f"## Sheet: {sheet_name}\n" + "\n".join(rows))
+    wb.close()
+    return "\n\n".join(parts)
+
+
+def chunk_xlsx(testo: str, filepath: str, max_chars: int = CHUNK_MAX_CHARS,
+               overlap: int = CHUNK_OVERLAP_CHARS) -> list[str]:  # noqa: ARG001
+    """Chunk xlsx text: split by sheet boundaries first, then by rows."""
+    header = f"# File: {filepath}\n"
+    chunks = []
+    sheets = testo.split("\n\n## Sheet: ")
+    for i, section in enumerate(sheets):
+        section_text = section if i == 0 else "## Sheet: " + section
+        lines = section_text.split("\n")
+        current, length = [], 0
+        for line in lines:
+            current.append(line)
+            length += len(line) + 1
+            if length >= max_chars:
+                chunks.append(header + "\n".join(current))
+                sheet_header = [ln for ln in current if ln.startswith("## Sheet:")]
+                current = sheet_header
+                length = sum(len(ln) + 1 for ln in current)
+        if current:
+            chunks.append(header + "\n".join(current))
+    return [c for c in chunks if len(c.strip()) > 50]
+
+
 def should_skip(filepath: str) -> bool:
     parts = filepath.split(os.sep)
     if any(d in SKIP_DIRS for d in parts):
@@ -154,9 +215,18 @@ def scan_repos(repos_path: str) -> list[dict]:
             for filepath in glob.glob(os.path.join(repo_path, "**", ext), recursive=True):
                 if should_skip(filepath):
                     continue
+                file_ext = os.path.splitext(filepath)[1].lower()
                 try:
-                    with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
-                        contenuto = f.read()
+                    if file_ext == ".xlsx":
+                        contenuto = read_xlsx(filepath)
+                        chunker = chunk_xlsx
+                    elif file_ext == ".xls":
+                        contenuto = read_xls(filepath)
+                        chunker = chunk_xlsx
+                    else:
+                        with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
+                            contenuto = f.read()
+                        chunker = chunk_codice
                 except Exception:
                     continue
                 if not contenuto.strip() or len(contenuto) < 20:
@@ -165,14 +235,14 @@ def scan_repos(repos_path: str) -> list[dict]:
                 file_count += 1
                 rel_path = os.path.relpath(filepath, repos_path)
                 file_hash = _content_hash(contenuto)
-                for i, chunk in enumerate(chunk_codice(contenuto, rel_path)):
+                for i, chunk in enumerate(chunker(contenuto, rel_path)):
                     documenti.append({
                         "id": _chunk_id(rel_path, i),
                         "content": chunk,
                         "file": rel_path,
                         "repo": repo_name,
                         "chunk_index": i,
-                        "extension": os.path.splitext(filepath)[1],
+                        "extension": file_ext,
                         "content_hash": file_hash,
                     })
                     chunk_count += 1
